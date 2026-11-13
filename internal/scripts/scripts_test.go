@@ -13,16 +13,18 @@ import (
 )
 
 type recorder struct {
-	mu     sync.Mutex
-	events []string
-	loads  []string // 装载过的脚本内容
-	last   map[string]any
+	mu       sync.Mutex
+	events   []string
+	payloads []map[string]any
+	loads    []string // 装载过的脚本内容
+	last     map[string]any
 }
 
 func (r *recorder) emit(name string, payload map[string]any) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.events = append(r.events, name)
+	r.payloads = append(r.payloads, payload)
 	r.last = payload
 }
 
@@ -214,6 +216,43 @@ func TestSaveInactiveScriptDoesNotLoad(t *testing.T) {
 	}
 	if rec.count(events.EvScriptReloaded) != 0 {
 		t.Fatal("inactive save must not emit script:reloaded")
+	}
+}
+
+// 保存成功必须广播 script:changed：AI 应用草稿、CLI 等非编辑器入口
+// 写盘后，编辑器只能靠这个事件把 Monaco 里的旧内容换掉。
+func TestSaveEmitsChanged(t *testing.T) {
+	dir := t.TempDir()
+	writeFile(t, dir, "main.lua", "function on_frame() end\n")
+	s, rec := newSvc(t, dir, "main.lua")
+
+	src := "function on_frame(raw)\n  return { a = 1 }\nend\n"
+	if _, err := s.Save("main.lua", src); err != nil {
+		t.Fatal(err)
+	}
+
+	rec.mu.Lock()
+	payloads := append([]map[string]any(nil), rec.payloads...)
+	rec.mu.Unlock()
+
+	var changed map[string]any
+	for i := len(payloads) - 1; i >= 0; i-- {
+		if rec.events[i] == events.EvScriptChanged {
+			changed = payloads[i]
+			break
+		}
+	}
+	if changed == nil {
+		t.Fatal("Save must emit script:changed")
+	}
+	if changed["name"] != "main.lua" {
+		t.Fatalf("name = %v", changed["name"])
+	}
+	if changed["content"] != src {
+		t.Fatalf("content = %v", changed["content"])
+	}
+	if changed["source"] != "ui" {
+		t.Fatalf("source = %v", changed["source"])
 	}
 }
 

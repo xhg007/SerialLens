@@ -269,6 +269,8 @@ func (s *Service) Save(name, content string) (SaveResult, error) {
 			s.emitReloaded(name, "ui", res.CompileMS, res.LoadMS)
 		}
 	}
+	// 内容已落盘（哪怕编译失败）：通知编辑器换掉旧内容，否则用户看到的还是上一版
+	s.emitChanged(name, content, "ui")
 	res.ElapsedMS = time.Since(start).Milliseconds()
 	return res, nil
 }
@@ -438,6 +440,17 @@ func (s *Service) emitError(name, source string, err error) {
 	emit(events.EvScriptError, map[string]any{
 		"script": name, "error": d.Message, "line": d.Line, "column": d.Column, "source": source,
 	})
+}
+
+// emitChanged 广播脚本内容变化。
+//
+// Save 也要发：写盘的一方不一定是编辑器（AI 应用草稿、CLI、将来别的面板），
+// 编辑器只能靠这个事件把 Monaco 里的旧内容换掉。
+func (s *Service) emitChanged(name, content, source string) {
+	s.mu.Lock()
+	emit := s.emit
+	s.mu.Unlock()
+	emit(events.EvScriptChanged, map[string]any{"name": name, "content": content, "source": source})
 }
 
 // ---------- 文件系统 ----------

@@ -2,6 +2,7 @@ import { create } from "zustand";
 import { Events } from "@wailsio/runtime";
 import * as AIAPI from "../../bindings/seriallens/internal/app/aiapi";
 import * as EditorAPI from "../../bindings/seriallens/internal/app/editorapi";
+import { useEditorStore } from "./editor";
 
 export interface AIProvider {
   id: string;
@@ -130,6 +131,12 @@ function errText(e: unknown): string {
 
 function newId(): string {
   return `m-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+}
+
+/** 当前活动脚本名（后端没给 target 时兜底查询）。 */
+async function activeScriptName(): Promise<string> {
+  const list = (await EditorAPI.ListScripts()) as any[];
+  return (list ?? []).find((f) => f?.active)?.name ?? "main.lua";
 }
 
 export const useAIStore = create<AIState>((set, get) => {
@@ -378,9 +385,14 @@ export const useAIStore = create<AIState>((set, get) => {
         await AIAPI.ResolveAIConfirm(c.id, approved);
         if (approved && c.kind === "script_draft" && c.content) {
           // 只有用户确认才写正式脚本目录（PRD §4.1：AI 不越权）
-          const target = await EditorAPI.ListScripts();
-          const active = (target ?? []).find((f: any) => f.active)?.name ?? "main.lua";
-          await EditorAPI.SaveScript(active, c.content);
+          const active = c.target || (await activeScriptName());
+          const report = (await EditorAPI.SaveScript(active, c.content)) as any;
+          // 内容已落盘：立刻让编辑器换掉旧内容（事件也会到，这里保证同一帧生效）
+          useEditorStore.getState().adoptExternal(active, c.content);
+          if (report && report.ok === false) {
+            const msg = report.diagnostic?.message ?? "未知错误";
+            set({ error: `已写入 ${active}，但编译失败：${msg}` });
+          }
         }
         set({ confirm: null, confirming: false });
         void get().refreshSessions();

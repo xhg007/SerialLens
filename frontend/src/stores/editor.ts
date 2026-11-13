@@ -58,6 +58,8 @@ interface EditorState {
   deleteScript: (name: string) => Promise<void>;
   setActiveScript: (name: string) => Promise<void>;
   testRunFrame: (hex: string) => Promise<void>;
+  /** 别处（AI 应用草稿 / 外部 IDE）已经写盘：直接让编辑器跟随磁盘内容。 */
+  adoptExternal: (name: string, content: string) => void;
   applyExternal: () => void;
   dismissExternal: () => void;
   clearError: () => void;
@@ -83,17 +85,23 @@ export const useEditorStore = create<EditorState>((set, get) => {
     if (Array.isArray(files)) set({ files: [...files] });
   });
 
+  // 磁盘内容变了：自己保存时内容本来就一致（不会进分支），
+  // 真正会走到这里的是「别处写的」——AI 应用草稿、外部 IDE、CLI。
   Events.On("script:changed", (ev: any) => {
     const name = ev.data?.name as string | undefined;
     const content = ev.data?.content as string | undefined;
-    const source = ev.data?.source as string | undefined;
+    const removed = Boolean(ev.data?.removed);
     if (!name) return;
-    if (source !== "external") return; // 自己写的，UI 已经是新的
-    if (get().current === name && content != null) {
+    if (removed) {
+      void refresh();
+      return;
+    }
+    if (get().current === name && content != null && get().content !== content) {
       if (get().content === get().savedContent) {
         // 本地没有未保存修改：直接跟随磁盘
-        set({ content, savedContent: content, diag: null });
+        set({ content, savedContent: content, diag: null, lastSave: null });
       } else {
+        // 有未保存的编辑：不静默覆盖，交给用户决定
         set({ externalUpdate: { name, content } });
       }
     }
@@ -252,6 +260,18 @@ export const useEditorStore = create<EditorState>((set, get) => {
           testRun: { ok: false, diagnostic: { line: 0, column: 0, message: errText(e), level: "error" } },
         });
       }
+    },
+
+    adoptExternal: (name, content) => {
+      if (get().current === name && get().content !== content) {
+        if (get().content === get().savedContent) {
+          set({ content, savedContent: content, diag: null, externalUpdate: null, lastSave: null });
+        } else {
+          // 用户手上还有没保存的编辑：磁盘已经变了，让他自己决定要不要盖掉
+          set({ externalUpdate: { name, content } });
+        }
+      }
+      void refresh();
     },
 
     applyExternal: () => {

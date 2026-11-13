@@ -8,7 +8,9 @@ import { useProjectStore } from "./stores/project";
 import { useEditorStore } from "./stores/editor";
 import { useParserStore } from "./stores/parser";
 import { useAIStore } from "./stores/ai";
+import { monaco } from "./lib/monaco";
 import * as ChartsAPI from "../bindings/seriallens/internal/app/chartsapi";
+import * as EditorAPI from "../bindings/seriallens/internal/app/editorapi";
 import * as ParserAPI from "../bindings/seriallens/internal/app/parserapi";
 
 interface DevStats {
@@ -94,6 +96,9 @@ declare global {
     __slDevAIConfirm?: (approved: boolean) => Promise<void>;
     __slDevTestRun?: (hex: string) => Promise<Record<string, unknown> | null>;
     __slDevEditorContent?: () => string;
+    __slDevEditorState?: () => Record<string, unknown>;
+    __slDevSaveScript?: (name: string, content: string) => Promise<Record<string, unknown>>;
+    __slDevEditEditor?: (text: string) => void;
     __slDevAISave?: (patch: Record<string, unknown>) => Promise<Record<string, unknown> | null>;
     __slDevAITest?: (patch: Record<string, unknown>) => Promise<string>;
     __slDevAISend?: (text: string) => Promise<void>;
@@ -194,6 +199,30 @@ window.__slDevTestRun = async (hex: string) => {
   return useEditorStore.getState().testRun as unknown as Record<string, unknown> | null;
 };
 window.__slDevEditorContent = () => useEditorStore.getState().content.slice(0, 300);
+// 模拟「AI 应用草稿」：只走后端 SaveScript，看前端能否自己跟上（事件链路）
+window.__slDevSaveScript = async (name: string, content: string) => {
+  const report = await EditorAPI.SaveScript(name, content);
+  return report as unknown as Record<string, unknown>;
+};
+// 模拟用户在编辑器里敲字（制造未保存修改）
+window.__slDevEditEditor = (text: string) => {
+  useEditorStore.getState().setContent(text);
+};
+// store 与 Monaco model 的对照：两者不一致就是「界面没刷新」的 bug
+window.__slDevEditorState = () => {
+  const s = useEditorStore.getState();
+  const models = monaco.editor.getModels().map((m) => {
+    const v = m.getValue();
+    return { uri: m.uri.path, len: v.length, head: v.slice(0, 60) };
+  });
+  return {
+    current: s.current,
+    contentLen: s.content.length,
+    savedLen: s.savedContent.length,
+    external: s.externalUpdate?.name ?? null,
+    models,
+  };
+};
 window.__slDevAIConfirm = async (approved) => {
   await useAIStore.getState().resolveConfirm(approved);
 };
