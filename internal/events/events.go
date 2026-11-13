@@ -42,4 +42,10 @@ const (
 	EvAIDelta  = "ai:delta"  // payload: {id, text, reasoning}（~60ms 合批）
 	EvAIDone   = "ai:done"   // payload: {id, content, reasoning, usage, elapsed_ms, first_ms, finish_reason, canceled}
 	EvAIError  = "ai:error"  // payload: {id, message}
+
+	// AI 工具调用（M5 阶段二）
+	EvAIToolCall   = "ai:tool_call"   // payload: {id, call_id, name, args, round}
+	EvAIToolResult = "ai:tool_result" // payload: {id, call_id, name, ok, duration_ms, result, error}
+	EvAIConfirm    = "ai:confirm"     // payload: {id, call_id, kind, title, description, target, content, diff}
+	EvAISession    = "ai:session"     // payload: {session_id, path}
 )

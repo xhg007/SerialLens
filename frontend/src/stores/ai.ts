@@ -1,6 +1,7 @@
 import { create } from "zustand";
 import { Events } from "@wailsio/runtime";
 import * as AIAPI from "../../bindings/seriallens/internal/app/aiapi";
+import * as EditorAPI from "../../bindings/seriallens/internal/app/editorapi";
 
 export interface AIProvider {
   id: string;
@@ -31,6 +32,18 @@ export interface AISettingsView {
   messages?: number;
 }
 
+/** 一次工具调用的 UI 记录（时间线用）。 */
+export interface AIToolCall {
+  callId: string;
+  name: string;
+  args?: unknown;
+  ok?: boolean;
+  durationMs?: number;
+  result?: unknown;
+  error?: string;
+  running: boolean;
+}
+
 export interface AIMessage {
   id: string;
   role: "user" | "assistant";
@@ -43,6 +56,29 @@ export interface AIMessage {
   usage?: { prompt_tokens?: number; completion_tokens?: number; total_tokens?: number };
   elapsedMs?: number;
   firstMs?: number;
+  tools?: AIToolCall[];
+  rounds?: number;
+}
+
+/** 后端发来的确认请求（阻塞等待前端决定）。 */
+export interface AIConfirm {
+  id: string;
+  runId: string;
+  kind: "script_draft" | "context_hints" | "generic";
+  title: string;
+  description: string;
+  target?: string;
+  content?: string;
+  diff?: string;
+}
+
+export interface AISessionSummary {
+  id: string;
+  title: string;
+  model: string;
+  updated: number;
+  size: number;
+  turns: number;
 }
 
 export interface AISettingsPatch {
@@ -67,6 +103,11 @@ interface AIState {
   testing: boolean;
   testResult: string;
   runId: string | null;
+  confirm: AIConfirm | null;
+  confirming: boolean;
+  sessionId: string;
+  sessions: AISessionSummary[];
+  task: "script" | "charts";
 
   hydrate: () => Promise<void>;
   saveSettings: (patch: AISettingsPatch) => Promise<void>;
@@ -75,6 +116,10 @@ interface AIState {
   cancel: () => Promise<void>;
   clear: () => Promise<void>;
   dismissError: () => void;
+  resolveConfirm: (approved: boolean) => Promise<void>;
+  refreshSessions: () => Promise<void>;
+  loadSession: (id: string) => Promise<void>;
+  setTask: (t: "script" | "charts") => void;
 }
 
 function errText(e: unknown): string {
@@ -90,6 +135,12 @@ function newId(): string {
 export const useAIStore = create<AIState>((set, get) => {
   const patchMessage = (id: string, fn: (m: AIMessage) => AIMessage) => {
     set({ messages: get().messages.map((m) => (m.id === id ? fn(m) : m)) });
+  };
+  const patchTool = (id: string, callId: string, fn: (t: AIToolCall) => AIToolCall) => {
+    patchMessage(id, (m) => ({
+      ...m,
+      tools: (m.tools ?? []).map((t) => (t.callId === callId ? fn(t) : t)),
+    }));
   };
 
   // 事件契约见 internal/events/events.go（EvAI*），单一事实来源在 Go 侧。
@@ -113,7 +164,7 @@ export const useAIStore = create<AIState>((set, get) => {
       error: "",
       messages: [
         ...get().messages,
-        { id, role: "assistant", content: "", ts: Date.now(), streaming: true },
+        { id, role: "assistant", content: "", ts: Date.now(), streaming: true, tools: [] },
       ],
     });
   });
@@ -126,7 +177,10 @@ export const useAIStore = create<AIState>((set, get) => {
     // 事件可能比 ai:start 先到（同一帧内），兜底新建
     if (!get().messages.some((m) => m.id === id && m.role === "assistant")) {
       set({
-        messages: [...get().messages, { id, role: "assistant", content: "", ts: Date.now(), streaming: true }],
+        messages: [
+          ...get().messages,
+          { id, role: "assistant", content: "", ts: Date.now(), streaming: true, tools: [] },
+        ],
       });
     }
     patchMessage(id, (m) => ({
@@ -137,6 +191,48 @@ export const useAIStore = create<AIState>((set, get) => {
     }));
   });
 
+  Events.On("ai:tool_call", (ev: any) => {
+    const id = String(ev.data?.id ?? "");
+    const call: AIToolCall = {
+      callId: String(ev.data?.call_id ?? ""),
+      name: String(ev.data?.name ?? "tool"),
+      args: ev.data?.args,
+      running: true,
+    };
+    if (!get().messages.some((m) => m.id === id)) return;
+    patchMessage(id, (m) => ({ ...m, tools: [...(m.tools ?? []), call] }));
+  });
+
+  Events.On("ai:tool_result", (ev: any) => {
+    const id = String(ev.data?.id ?? "");
+    const callId = String(ev.data?.call_id ?? "");
+    patchTool(id, callId, (t) => ({
+      ...t,
+      ok: Boolean(ev.data?.ok),
+      durationMs: Number(ev.data?.duration_ms ?? 0),
+      result: ev.data?.result,
+      error: ev.data?.error ? String(ev.data.error) : undefined,
+      running: false,
+    }));
+  });
+
+  Events.On("ai:confirm", (ev: any) => {
+    const d = ev.data ?? {};
+    set({
+      confirm: {
+        id: String(d.id ?? ""),
+        runId: String(d.run_id ?? ""),
+        kind: (d.kind ?? "generic") as AIConfirm["kind"],
+        title: String(d.title ?? "需要确认"),
+        description: String(d.description ?? ""),
+        target: d.target ? String(d.target) : undefined,
+        content: d.content ? String(d.content) : undefined,
+        diff: d.diff ? String(d.diff) : undefined,
+      },
+      confirming: false,
+    });
+  });
+
   Events.On("ai:done", (ev: any) => {
     const id = String(ev.data?.id ?? "");
     const content = String(ev.data?.content ?? "");
@@ -145,6 +241,7 @@ export const useAIStore = create<AIState>((set, get) => {
     const usage = ev.data?.usage as AIMessage["usage"];
     const elapsedMs = Number(ev.data?.elapsed_ms ?? 0);
     const firstMs = Number(ev.data?.first_ms ?? 0);
+    const rounds = Number(ev.data?.rounds ?? 0);
     set({ busy: false, runId: null });
     if (!get().messages.some((m) => m.id === id)) return;
     // done 里的 content 是权威全文：覆盖式写入，避免增量丢帧导致重复/缺失
@@ -157,7 +254,10 @@ export const useAIStore = create<AIState>((set, get) => {
       usage,
       elapsedMs,
       firstMs,
+      rounds,
+      tools: (m.tools ?? []).map((t) => (t.running ? { ...t, running: false } : t)),
     }));
+    void get().refreshSessions();
   });
 
   Events.On("ai:error", (ev: any) => {
@@ -165,6 +265,11 @@ export const useAIStore = create<AIState>((set, get) => {
     const message = String(ev.data?.message ?? "未知错误");
     set({ busy: false, runId: null, error: message });
     patchMessage(id, (m) => ({ ...m, streaming: false, error: message }));
+  });
+
+  Events.On("ai:session", (ev: any) => {
+    set({ sessionId: String(ev.data?.session_id ?? "") });
+    void get().refreshSessions();
   });
 
   return {
@@ -176,18 +281,25 @@ export const useAIStore = create<AIState>((set, get) => {
     testing: false,
     testResult: "",
     runId: null,
+    confirm: null,
+    confirming: false,
+    sessionId: "",
+    sessions: [],
+    task: "script",
 
     hydrate: async () => {
       try {
-        const [providers, settings, conv] = await Promise.all([
+        const [providers, settings, conv, info] = await Promise.all([
           AIAPI.GetAIProviders(),
           AIAPI.GetAISettings(),
           AIAPI.GetAIConversation(),
+          AIAPI.GetAISessionInfo(),
         ]);
         set({
           providers: providers as unknown as AIProvider[],
           settings: settings as unknown as AISettingsView,
           busy: Boolean((settings as any)?.running),
+          sessionId: String((info as any)?.id ?? ""),
           messages: (conv as unknown as any[]).map((m) => ({
             id: newId(),
             role: m.role,
@@ -196,6 +308,7 @@ export const useAIStore = create<AIState>((set, get) => {
             ts: Number(m.ts ?? Date.now()),
           })),
         });
+        void get().refreshSessions();
       } catch (e) {
         set({ error: errText(e) });
       }
@@ -231,7 +344,7 @@ export const useAIStore = create<AIState>((set, get) => {
       const user: AIMessage = { id: newId(), role: "user", content: t, ts: Date.now() };
       set({ messages: [...get().messages, user], error: "" });
       try {
-        await AIAPI.SendAIMessage(t);
+        await AIAPI.SendAIMessageAs(t, get().task);
       } catch (e) {
         set({ error: errText(e) });
       }
@@ -248,12 +361,59 @@ export const useAIStore = create<AIState>((set, get) => {
     clear: async () => {
       try {
         await AIAPI.ClearAIConversation();
-        set({ messages: [], error: "" });
+        set({ messages: [], error: "", confirm: null, sessionId: "" });
       } catch (e) {
         set({ error: errText(e) });
       }
     },
 
     dismissError: () => set({ error: "" }),
+
+    // 用户决定：先回填 Go 侧（阻塞的工具立刻恢复），再按 kind 执行本地动作。
+    resolveConfirm: async (approved) => {
+      const c = get().confirm;
+      if (!c || get().confirming) return;
+      set({ confirming: true });
+      try {
+        await AIAPI.ResolveAIConfirm(c.id, approved);
+        if (approved && c.kind === "script_draft" && c.content) {
+          // 只有用户确认才写正式脚本目录（PRD §4.1：AI 不越权）
+          const target = await EditorAPI.ListScripts();
+          const active = (target ?? []).find((f: any) => f.active)?.name ?? "main.lua";
+          await EditorAPI.SaveScript(active, c.content);
+        }
+        set({ confirm: null, confirming: false });
+        void get().refreshSessions();
+      } catch (e) {
+        set({ confirming: false, error: errText(e) });
+      }
+    },
+
+    refreshSessions: async () => {
+      try {
+        const list = await AIAPI.ListAISessions();
+        set({ sessions: (list ?? []) as unknown as AISessionSummary[] });
+      } catch {
+        /* 没有工程时静默 */
+      }
+    },
+
+    loadSession: async (id) => {
+      try {
+        const res: any = await AIAPI.LoadAISession(id);
+        const events: any[] = res?.events ?? [];
+        const msgs: AIMessage[] = [];
+        for (const e of events) {
+          if (e.type === "message" && e.content && (e.role === "user" || e.role === "assistant")) {
+            msgs.push({ id: newId(), role: e.role, content: e.content, ts: Date.parse(e.ts) || Date.now() });
+          }
+        }
+        set({ messages: msgs, sessionId: String(res?.id ?? id), error: "" });
+      } catch (e) {
+        set({ error: errText(e) });
+      }
+    },
+
+    setTask: (t) => set({ task: t }),
   };
 });

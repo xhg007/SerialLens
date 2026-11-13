@@ -35,6 +35,8 @@ type Settings struct {
 	Enabled     bool    `json:"enabled"`
 	// SystemExtra 追加到 system prompt 末尾的工程偏好（例如「优先用小端」）。
 	SystemExtra string `json:"system_extra,omitempty"`
+	// NoticeAck 用户是否已确认「对话内容会外发给供应商」（PRD §4.8，首次发送时弹原生对话框）。
+	NoticeAck bool `json:"notice_ack,omitempty"`
 
 	// APIKey 只存在于内存：读盘时解密、写盘时加密，绝不进 Wails 返回值。
 	APIKey string `json:"-"`
@@ -134,6 +136,8 @@ func (s Settings) Masked() map[string]any {
 		"has_key":      r.APIKey != "",
 		"key_hint":     hint,
 		"key_from_env": s.KeyFromEnv,
+		"notice_ack":   r.NoticeAck,
+		"local":        IsLocalEndpoint(r.BaseURL),
 		"ready":        r.Ready(),
 	}
 }
@@ -184,6 +188,7 @@ func (s *Store) Load() (Settings, error) {
 		TimeoutSec  int     `json:"timeout_sec"`
 		Enabled     *bool   `json:"enabled"`
 		SystemExtra string  `json:"system_extra"`
+		NoticeAck   bool    `json:"notice_ack"`
 	}
 	if err := json.Unmarshal(trimBOM(raw), &doc); err != nil {
 		return defaultWithEnv(nil), fmt.Errorf("parse %s: %w", FileName, err)
@@ -196,6 +201,7 @@ func (s *Store) Load() (Settings, error) {
 		MaxTokens:   doc.MaxTokens,
 		TimeoutSec:  doc.TimeoutSec,
 		SystemExtra: doc.SystemExtra,
+		NoticeAck:   doc.NoticeAck,
 		Enabled:     true,
 	}
 	if doc.Enabled != nil {
@@ -235,6 +241,10 @@ func (s *Store) Save(in Settings) error {
 	}
 	if keyEnc != "" {
 		doc["api_key_enc"] = keyEnc
+	}
+	// notice_ack 是「一次确认、永久记住」，Save 不能把它顺手清掉
+	if r.NoticeAck || s.noticeAckLocked() {
+		doc["notice_ack"] = true
 	}
 	raw, err := json.MarshalIndent(doc, "", "  ")
 	if err != nil {
@@ -276,6 +286,64 @@ func (s *Store) storedKeyLocked() string {
 		return ""
 	}
 	return doc.KeyEnc
+}
+
+// IsLocalEndpoint 判断端点是否在本机（本地模型不外发数据，不需要外发告知）。
+func IsLocalEndpoint(baseURL string) bool {
+	u := strings.ToLower(strings.TrimSpace(baseURL))
+	for _, host := range []string{"127.0.0.1", "localhost", "0.0.0.0", "[::1]", "::1"} {
+		if strings.Contains(u, "//"+host) || strings.HasPrefix(u, host) {
+			return true
+		}
+	}
+	return false
+}
+
+// EndpointHost 取端点主机名（用于外发提示文案）。
+func EndpointHost(baseURL string) string {
+	u := strings.TrimSpace(baseURL)
+	if i := strings.Index(u, "://"); i >= 0 {
+		u = u[i+3:]
+	}
+	if i := strings.IndexAny(u, "/"); i >= 0 {
+		u = u[:i]
+	}
+	return u
+}
+
+// MarkNoticeAck 记录用户已确认数据外发（只写 notice_ack，不动其它字段）。
+func (s *Store) MarkNoticeAck() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	doc := map[string]any{}
+	if raw, err := os.ReadFile(s.filePath()); err == nil {
+		_ = json.Unmarshal(trimBOM(raw), &doc)
+	}
+	doc["notice_ack"] = true
+	out, err := json.MarshalIndent(doc, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(s.home, 0o700); err != nil {
+		return err
+	}
+	return os.WriteFile(s.filePath(), out, 0o600)
+}
+
+// noticeAckLocked 读盘上是否已确认外发（调用方持锁）。
+func (s *Store) noticeAckLocked() bool {
+	raw, err := os.ReadFile(s.filePath())
+	if err != nil {
+		return false
+	}
+	var doc struct {
+		NoticeAck bool `json:"notice_ack"`
+	}
+	if err := json.Unmarshal(trimBOM(raw), &doc); err != nil {
+		return false
+	}
+	return doc.NoticeAck
 }
 
 // ClearKey 删除已保存的 Key（UI「清除密钥」）。

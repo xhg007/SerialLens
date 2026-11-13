@@ -1,5 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useAIStore, type AIMessage, type AIProvider } from "../stores/ai";
+import {
+  useAIStore,
+  type AIConfirm,
+  type AIMessage,
+  type AIProvider,
+  type AIToolCall,
+} from "../stores/ai";
 import { useParserStore } from "../stores/parser";
 
 const BTN =
@@ -21,6 +27,11 @@ export function AIPanel() {
   const error = useAIStore((s) => s.error);
   const testing = useAIStore((s) => s.testing);
   const testResult = useAIStore((s) => s.testResult);
+  const confirm = useAIStore((s) => s.confirm);
+  const confirming = useAIStore((s) => s.confirming);
+  const task = useAIStore((s) => s.task);
+  const sessions = useAIStore((s) => s.sessions);
+  const sessionId = useAIStore((s) => s.sessionId);
   const scriptName = useParserStore((s) => s.script);
 
   const [showSettings, setShowSettings] = useState(false);
@@ -58,6 +69,22 @@ export function AIPanel() {
           {settings?.model || "未选择模型"}
         </span>
         <div className="ml-auto flex items-center gap-1">
+          <TaskToggle task={task} busy={busy} />
+          <select
+            className="max-w-32 rounded-panel border border-border bg-bg-2 px-1 py-0.5 text-[11px] text-text-2 outline-none"
+            value={sessionId}
+            title="历史会话"
+            onChange={(e) => void useAIStore.getState().loadSession(e.target.value)}
+          >
+            <option value={sessionId}>{sessionId ? "本次会话" : "新会话"}</option>
+            {sessions
+              .filter((s) => s.id !== sessionId)
+              .map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.title}（{s.turns} 轮）
+                </option>
+              ))}
+          </select>
           <button className={BTN} onClick={() => setShowSettings((v) => !v)}>
             {showSettings ? "收起设置" : "设置"}
           </button>
@@ -68,6 +95,8 @@ export function AIPanel() {
       </div>
 
       {showSettings && <SettingsForm providers={providers} testing={testing} testResult={testResult} />}
+
+      {confirm && <ConfirmCard c={confirm} busy={confirming} />}
 
       {/* 消息区 */}
       <div ref={scrollRef} className="min-h-0 flex-1 overflow-auto px-2 py-2">
@@ -146,6 +175,107 @@ function StatusDot({ ready, running }: { ready: boolean; running: boolean }) {
   const color = running ? "bg-warn" : ready ? "bg-rx" : "bg-danger";
   const title = running ? "生成中" : ready ? "已就绪" : "未配置";
   return <span className={`h-2 w-2 shrink-0 rounded-full ${color}`} title={title} />;
+}
+
+// TaskToggle 双任务模式（PRD §4.3）：任务 B 只写图表，拿不到写脚本的工具。
+function TaskToggle({ task, busy }: { task: "script" | "charts"; busy: boolean }) {
+  const set = (t: "script" | "charts") => useAIStore.getState().setTask(t);
+  const cls = (active: boolean) =>
+    `rounded-panel px-1.5 py-0.5 text-[11px] ${
+      active ? "bg-bg-2 text-accent" : "text-text-2 hover:text-accent"
+    } ${busy ? "opacity-40" : ""}`;
+  return (
+    <div className="flex shrink-0 items-center gap-0.5 rounded-panel border border-border px-0.5">
+      <button className={cls(task === "script")} disabled={busy} onClick={() => set("script")} title="生成/修复 Lua 脚本">
+        脚本
+      </button>
+      <button className={cls(task === "charts")} disabled={busy} onClick={() => set("charts")} title="根据脚本同步图表配置">
+        图表
+      </button>
+    </div>
+  );
+}
+
+// ConfirmCard 工具层的持久化关卡：AI 想落盘必须过这里（PRD §4.4 request_user_confirm）。
+function ConfirmCard({ c, busy }: { c: AIConfirm; busy: boolean }) {
+  const approveLabel =
+    c.kind === "script_draft" ? "应用并写入脚本" : c.kind === "context_hints" ? "写入工程配置" : "确认";
+  const diffLines = (c.diff ?? "").split("\n");
+  return (
+    <div className="shrink-0 border-b border-warn/40 bg-warn/10 p-2 text-[11px]">
+      <div className="flex items-center gap-2">
+        <span className="font-semibold text-warn">需要确认</span>
+        <span className="min-w-0 flex-1 truncate text-text-1">{c.title}</span>
+        {c.target && <span className="shrink-0 text-text-2">{c.target}</span>}
+      </div>
+      {c.description && (
+        <p className="mt-1 whitespace-pre-wrap break-words text-text-2">{c.description}</p>
+      )}
+      {c.diff && (
+        <pre className="mt-1 max-h-56 overflow-auto rounded-panel border border-border bg-bg-0 p-1 text-[10px] leading-4">
+          {diffLines.map((line, i) => (
+            <div
+              key={i}
+              className={
+                line.startsWith("+") && !line.startsWith("+++")
+                  ? "text-rx"
+                  : line.startsWith("-") && !line.startsWith("---")
+                    ? "text-danger"
+                    : "text-text-2"
+              }
+            >
+              {line || " "}
+            </div>
+          ))}
+        </pre>
+      )}
+      <div className="mt-1 flex items-center gap-2">
+        <button
+          className="rounded-panel bg-accent px-2 py-0.5 text-[11px] font-semibold text-bg-0 hover:opacity-90 disabled:opacity-50"
+          disabled={busy}
+          onClick={() => void useAIStore.getState().resolveConfirm(true)}
+        >
+          {busy ? "处理中…" : approveLabel}
+        </button>
+        <button className={BTN} disabled={busy} onClick={() => void useAIStore.getState().resolveConfirm(false)}>
+          放弃
+        </button>
+        <span className="ml-auto text-text-2">AI 不会自行写入正式脚本</span>
+      </div>
+    </div>
+  );
+}
+
+// ToolTimeline 工具调用时间线：名字 + 耗时 + 展开看参数/结果。
+function ToolTimeline({ tools }: { tools: AIToolCall[] }) {
+  return (
+    <div className="mb-1 flex flex-col gap-0.5">
+      {tools.map((t) => (
+        <details key={t.callId} className="rounded-panel border border-border/60 bg-bg-2/40 px-1.5 py-0.5 text-[10px]">
+          <summary className="flex cursor-pointer select-none items-center gap-1.5 text-text-2">
+            <span className={t.running ? "text-warn" : t.ok ? "text-rx" : "text-danger"}>
+              {t.running ? "●" : t.ok ? "✓" : "✗"}
+            </span>
+            <span className="font-mono text-text-1">{t.name}</span>
+            {t.durationMs ? <span>{t.durationMs}ms</span> : null}
+            {t.error ? <span className="truncate text-danger">{t.error}</span> : null}
+          </summary>
+          <div className="mt-0.5 space-y-0.5">
+            {t.args != null && (
+              <pre className="max-h-32 overflow-auto whitespace-pre-wrap break-words text-text-2">
+                {JSON.stringify(t.args, null, 1)}
+              </pre>
+            )}
+            {t.result != null && (
+              <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words text-text-1">
+                {typeof t.result === "string" ? t.result : JSON.stringify(t.result, null, 1)}
+              </pre>
+            )}
+          </div>
+        </details>
+      ))}
+    </div>
+  );
 }
 
 function SettingsForm({
@@ -369,6 +499,7 @@ function MessageRow({ m }: { m: AIMessage }) {
           </pre>
         </details>
       )}
+      {m.tools && m.tools.length > 0 && <ToolTimeline tools={m.tools} />}
       <div className="text-xs text-text-1">
         {m.content ? <RichText text={m.content} /> : m.streaming ? <span className="text-text-2">…</span> : null}
       </div>
@@ -376,6 +507,7 @@ function MessageRow({ m }: { m: AIMessage }) {
       <div className="mt-0.5 flex items-center gap-2 text-[10px] text-text-2">
         {m.canceled && <span className="text-warn">已停止</span>}
         {m.error && <span className="text-danger">{m.error}</span>}
+        {m.tools && m.tools.length > 0 ? <span>{m.tools.length} 次工具调用</span> : null}
         {m.usage?.total_tokens ? <span>{m.usage.total_tokens} tokens</span> : null}
         {m.elapsedMs ? <span>{m.elapsedMs}ms</span> : null}
         {m.firstMs ? <span>首字 {m.firstMs}ms</span> : null}

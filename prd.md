@@ -253,6 +253,12 @@
 - `context_snapshot` 记录 AI 当时看到的样本/hint，可回溯
 - 大内容（脚本源码、HEX）以引用存放（指向 `.seriallens/drafts/`），避免膨胀
 - 单会话 > 5MB 自动截断早期消息，保留 meta 与最近 20 条
+
+> **实现状态（2026-11-13，M5 阶段二）**：`internal/agent/session.go`。
+> 文件 `<工程>/conversations/sess_<时间戳>.jsonl`，事件字段与本表一致（`call_id`/`ok`/`duration_ms` 保留）。
+> 实测一轮真实会话写出 11 行事件（1 meta + 1 user + 1 assistant 中间态 + 7 tool_call/tool_result）。
+> 截断按 5MB 阈值 + 保留 meta/context_snapshot 与最近 20 条；单行坏掉不影响其余历史（扫描时跳过）。
+> `user_action` 目前由前端「应用脚本」触发后写入（阶段三补）。
 ## 3.7 数据帧录制格式
 `.srec` 二进制格式：
 ```
@@ -317,6 +323,11 @@ Agent 状态机收敛为两个互不交叉的任务，由 Go 侧强制：
 > 触发：任务 A 完成后自动触发；或图表面板“AI 重新生成布局”
 > 流程：扫描脚本提取通道清单 → `read_charts_config` → LLM 推荐 widget 类型/颜色/量程 → schema 校验 → `update_charts_config`
 任务 A 的 LLM 不调用 charts 生成工具（仅触发流程），任务 B 的 LLM 不调用脚本生成工具。
+
+> **实现状态（2026-11-13，M5 阶段二）**：`internal/agent`（工具层与任务隔离）+ AI 面板「脚本 / 图表」开关。
+> 白名单在 `Registry.Defs(task)` 里下发、在 `Executor.Execute` 里**二次校验**（模型硬编造别的工具名也会被拒）。
+> 单测 `TestRegistryTaskIsolation` 锁死「任务 B 拿不到 save_script_draft / 任务 A 拿不到 update_charts_config」。
+> 任务 A 完整跑通：真实 DeepSeek 一轮对话触发 7 次工具调用（见 `docs/acceptance/m5-agent.md`）。
 ## 4.4 工具集（12 个，strict schema）
 | 工具名 | 入参 | 副作用 | 说明 |
 |---|---|---|---|
@@ -333,6 +344,13 @@ Agent 状态机收敛为两个互不交叉的任务，由 Go 侧强制：
 | `list_builtin_api` | `{}` | 无 | 兜底（API 文档已注入 system prompt） |
 | `read_recording_meta` | `{file}` | 无 | 仅当前工程 data/ |
 **关键约束**：LLM 无 `write_file`/`send_serial`/`delete` 工具；沙箱调用复用 LuaRuntime 池，单次 5s 超时。
+
+> **实现状态（2026-11-13，M5 阶段二）**：12 个工具全部实现（`internal/agent/tools.go`），入参与本表一致。
+> - 单次执行 5s 超时（`request_user_confirm` / `set_context_hints` 例外：10 分钟等用户点确认，否则用户还在看 diff 工具就超时了）
+> - `update_charts_config` 走 `charts.Service.SaveConfig` 的 schema 校验，失败返回结构化错误且**不落盘**
+> - `save_script_draft` 先编译再落盘：烂脚本不会进 `.seriallens/drafts/`，也不会被误应用
+> - `request_user_confirm` 有草稿时自动附 diff（统一 diff 文本）+ 待覆盖的正式脚本名，前端确认卡片渲染
+> - 实际没有 `write_file`/`send_serial`/`delete`/`http_request`：注册表里不存在这些名字，模型无从调用
 ## 4.5 Prompt 设计
 ### 4.5.1 上下文注入策略
 ```
@@ -670,7 +688,7 @@ const (
 | **M2 Lua 引擎** | 第 2~3 周 | LuaRuntime + 池 + 沙箱 + 全量内置 API + frame:parsed | Modbus 示例脚本解析正确；`-race` 下 100 goroutine 并发压测通过；1Mbps 持续 10 分钟 0 崩溃（**实测见 `docs/acceptance/m2-lua-runtime.md`**） |
 | **M3 图表** | 第 4 周 | ChartsService + charts.json 加载 + uPlot/ECharts 渲染 | 10 通道 × 100Hz 流畅；外部编辑 charts.json 实时同步（**实测见 `docs/acceptance/m3-charts.md`**） |
 | **M4 编辑器+热重载** | 第 5 周 | Monaco + fsnotify + 保存即生效 + 错误行号回显 | 修改脚本 < 100ms 生效（**实测见 `docs/acceptance/m4-editor.md`**） |
-| **M5 AI Agent** | 第 6~7 周 | 双任务状态机 + JSONL 会话 + 12 工具 + Diff 确认 + charts 联动 | 首试通过率 ≥ 50%，3 轮自修复 ≥ 85%；安全用例 100%；eval 集成 CI（**阶段一「LLM 接入 + 多轮对话」已完成，见 `docs/acceptance/m5-llm.md`**） |
+| **M5 AI Agent** | 第 6~7 周 | 双任务状态机 + JSONL 会话 + 12 工具 + Diff 确认 + charts 联动 | 首试通过率 ≥ 50%，3 轮自修复 ≥ 85%；安全用例 100%；eval 集成 CI（**阶段一「LLM 接入 + 多轮对话」见 `docs/acceptance/m5-llm.md`；阶段二「12 工具 + 双任务隔离 + 会话 + eval」见 `docs/acceptance/m5-agent.md`，实测首试 83.3% / 3 轮 100%**） |
 | **M6 收尾** | 第 8 周 | 录制回放、命令面板、3 工程模板、zip 导入导出、打包 | 三平台安装包 < 30MB；冷启动 < 2s；工程跨机迁移打开即用 |
 ---
 # 9. 风险清单
@@ -798,6 +816,20 @@ end
 | stream_options 兼容 | 流式请求 400 且 body 含 `stream_options` 时自动去掉重试一次 | vLLM / LM Studio 老版本不认识该字段；usage 只是锦上添花，不能因此断流 |
 | UI 归属 | 右侧 dock 改为「脚本 / AI 助手」双页签（Ctrl+I 直达），AI 面板命名「AI 脚本助手」 | PRD §4.2 明确不是聊天机器人：命名与占位文案引导任务化提问，边界写进 system prompt |
 | 无 Key 验收 | `cmd/mockllm`（仅 dev）：本地 OpenAI 兼容假服务，SSE + 可控延迟 + 取消感知 | 不能等用户买 Key 才验收；eval 回归（阶段二）同样依赖它 |
+## 10.9 实现裁决记录（M5 阶段二，2026-11-13）
+| 议题 | 裁决 | 原因 |
+|---|---|---|
+| 工具层归属 | 独立 `internal/agent`，副作用全部走 `Host` 接口 | 不依赖 Wails 就能单测和跑 eval；app 只做「读当前状态、写允许写的位置」的适配 |
+| 任务隔离 | 白名单**下发时过滤 + 执行时二次校验** | 只靠 system prompt 约束等于没有约束；模型编造工具名也会被拒 |
+| 确认关卡 | `request_user_confirm` / `set_context_hints` 单次超时放宽到 10 分钟 | 5s 的工具超时会让「用户还在看 diff」直接失败，是体验灾难 |
+| 正式脚本写入 | 工具只能写 `.seriallens/drafts/`；应用由前端调 `SaveScript` | AI 永远不碰 `scripts/`，用户点「应用」才算数（PRD §4.1 底线） |
+| 草稿准入 | `save_script_draft` 先编译，失败不落盘 | 烂草稿留着会让人误以为「可用的候选」 |
+| 空 assistant 消息 | `BuildMessages` 直接丢弃 | 实测 DeepSeek 会以 `Invalid assistant message` 拒绝整轮请求（模型只调工具、不产出正文时必现） |
+| 确认 diff | 文本 unified diff（Go 侧 LCS），卡片红绿行渲染 | Monaco DiffEditor 是 3.3MB chunk，只为看 40 行 diff 就拉进 AI 页签不值；文本 diff 也方便直接塞进 tool 结果回喂 |
+| 会话生命周期 | 一个工程一个进行中会话；切工程自动换文件；`ClearAIConversation` 结束当前会话 | PRD 要的是「按会话分文件」，但用户心智是「继续上次」；两者用「自动续写 + 手动切历史」折中 |
+| 数据外发告知 | 首次发送弹**系统原生** Question 对话框，确认后写 `notice_ack`；本地端点放行 | PRD §4.8 要求「首次启用告知」；原生对话框比前端 modal 更难被误关，且不依赖页面状态 |
+| eval 位置 | `internal/agent/eval` + `cmd/evalagent`，用例 JSONL，失败详情回喂重试 | 与 agent 同包便于复用 Host/沙箱；用例即数据，改 prompt 后 `-filter` 只跑相关类别省钱 |
+| 前端的任务开关 | 面板头部「脚本 / 图表」二选一，发送时作为 `task` 参数 | 双任务不是给模型自由选择的，是用户/流程决定的 |
 ---
 ## 落地要点总结
 1. **先建 eval，再写 Agent**：`internal/agent/eval/` 样本集在 M5 开始前就要有骨架，prompt 调优不能盲改；

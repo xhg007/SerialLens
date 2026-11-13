@@ -208,6 +208,32 @@ func (s *Service) SetActiveScript(name string) error {
 	return nil
 }
 
+// SetContextHints 写回 agent_settings.context_hints（AI 总结的协议要点）。
+// 与 SetActiveScript 同款「只改元数据」语义：调用方负责确认。
+func (s *Service) SetContextHints(hints string) error {
+	s.mu.Lock()
+	dir, meta := s.current, s.meta
+	closed := s.state != StateProjectOpen
+	s.mu.Unlock()
+	if closed || dir == "" || meta == nil {
+		return fmt.Errorf("no project open")
+	}
+	next := *meta
+	next.AgentSettings.ContextHints = hints
+	if err := Validate(&next); err != nil {
+		return err
+	}
+	if err := SaveMeta(dir, &next); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	if s.current == dir {
+		s.meta = &next
+	}
+	s.mu.Unlock()
+	return nil
+}
+
 func openedPayload(dir string, meta *ProjectMeta) map[string]any {
 	sc := meta.SerialConfig
 	return map[string]any{

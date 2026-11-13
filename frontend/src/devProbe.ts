@@ -91,6 +91,9 @@ declare global {
     __slDevWaitField?: (name: string, timeoutMs?: number) => Promise<number>;
     __slDevLastFields?: () => string[];
     __slDevInspectDir?: (dir: string) => Promise<Record<string, unknown>>;
+    __slDevAIConfirm?: (approved: boolean) => Promise<void>;
+    __slDevTestRun?: (hex: string) => Promise<Record<string, unknown> | null>;
+    __slDevEditorContent?: () => string;
     __slDevAISave?: (patch: Record<string, unknown>) => Promise<Record<string, unknown> | null>;
     __slDevAITest?: (patch: Record<string, unknown>) => Promise<string>;
     __slDevAISend?: (text: string) => Promise<void>;
@@ -186,6 +189,14 @@ window.__slDevAISend = async (text) => {
 window.__slDevAICancel = async () => {
   await useAIStore.getState().cancel();
 };
+window.__slDevTestRun = async (hex: string) => {
+  await useEditorStore.getState().testRunFrame(hex);
+  return useEditorStore.getState().testRun as unknown as Record<string, unknown> | null;
+};
+window.__slDevEditorContent = () => useEditorStore.getState().content.slice(0, 300);
+window.__slDevAIConfirm = async (approved) => {
+  await useAIStore.getState().resolveConfirm(approved);
+};
 window.__slDevInspectDir = async (dir) => {
   const info = await useProjectStore.getState().inspectDir(dir);
   return { ...info } as unknown as Record<string, unknown>;
@@ -195,6 +206,9 @@ window.__slDevAIState = () => {
   return {
     busy: s.busy,
     error: s.error,
+    task: s.task,
+    sessionId: s.sessionId,
+    confirm: s.confirm ? { id: s.confirm.id, kind: s.confirm.kind, title: s.confirm.title, target: s.confirm.target, hasDiff: !!s.confirm.diff } : null,
     messages: s.messages.map((m) => ({
       role: m.role,
       len: m.content.length,
@@ -203,6 +217,7 @@ window.__slDevAIState = () => {
       usage: m.usage,
       elapsedMs: m.elapsedMs,
       head: m.content.slice(0, 40),
+      tools: (m.tools ?? []).map((t) => ({ name: t.name, ok: t.ok, running: t.running, ms: t.durationMs, err: t.error })),
     })),
   };
 };

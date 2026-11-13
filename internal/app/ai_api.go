@@ -9,29 +9,35 @@ import (
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 
+	"seriallens/internal/agent"
 	"seriallens/internal/events"
 	"seriallens/internal/llm"
-	"seriallens/internal/lua"
 )
 
-// AIAPI AI 助手（PRD §4 / M5 第一阶段：LLM 接入 + 多轮对话）。
+// AIAPI AI 助手（PRD §4）：LLM 接入 + 多轮对话 + 工具调用 + 会话落盘。
 //
-// 本阶段只做「能连通、能多轮、能流式、能停」；工具调用与双任务状态机在下一阶段
-// 接在这条链路上（ChatStream 已支持 tool_calls 聚合，协议先就位）。
+// 阶段一（M5-1）只做「能连通、能多轮、能流式、能停」；阶段二把工具调用循环
+// 接进来：LLM 通过 12 个白名单工具读写工程上下文，正式脚本必须由用户在
+// Diff 卡片里点「应用」才会落盘。
 type AIAPI struct {
 	s     *Services
 	store *llm.Store
 
 	mu      sync.Mutex
-	conv    []llm.Message // 只存 user/assistant（system 每次现拼，避免上下文过期）
+	conv    []llm.Message // 只存 user/assistant 文本（system 每次现拼，避免上下文过期）
 	running bool
 	runID   string
 	cancel  context.CancelFunc
+
+	sess        *agent.Session
+	sessProject string
+
+	pending map[string]chan bool // 确认 id → 用户决定（UI 回填）
 }
 
 // NewAIService 构造 AI 服务；home 为空时用 ~/.seriallens。
 func NewAIService(s *Services, home string) *AIAPI {
-	return &AIAPI{s: s, store: llm.NewStore(home)}
+	return &AIAPI{s: s, store: llm.NewStore(home), pending: map[string]chan bool{}}
 }
 
 // ServiceStartup 注入事件桥接（install 幂等）。
@@ -49,12 +55,17 @@ func (a *AIAPI) GetAIProviders() []AIProvider {
 }
 
 // GetAISettings 返回脱敏后的配置（永远不含 Key 明文）。
+// 带上 running，页面重载后 UI 才不会以为「空闲」而允许再发一条。
 func (a *AIAPI) GetAISettings() map[string]any {
 	st, err := a.store.Load()
 	out := st.Masked()
 	if err != nil {
 		out["warning"] = err.Error()
 	}
+	a.mu.Lock()
+	out["running"] = a.running
+	out["messages"] = len(a.conv)
+	a.mu.Unlock()
 	return out
 }
 
@@ -175,11 +186,21 @@ func (a *AIAPI) TestAIConnection(in AISettingsInput) (map[string]any, error) {
 	}, nil
 }
 
-// SendAIMessage 发起一轮对话（立即返回 run id，正文通过 ai:delta 事件流式返回）。
+// SendAIMessage 发起一轮对话（默认任务 A：脚本生成/修复）。
 func (a *AIAPI) SendAIMessage(text string) (string, error) {
+	return a.SendAIMessageAs(text, string(agent.TaskScript))
+}
+
+// SendAIMessageAs 指定任务（script / charts）；白名单由 agent 包强制，
+// 任务 B 的模型拿不到任何写脚本的工具。
+func (a *AIAPI) SendAIMessageAs(text, task string) (string, error) {
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return "", fmt.Errorf("消息不能为空")
+	}
+	tk := agent.Task(task)
+	if tk != agent.TaskScript && tk != agent.TaskCharts {
+		tk = agent.TaskScript
 	}
 	st, err := a.store.Load()
 	if err != nil {
@@ -190,6 +211,9 @@ func (a *AIAPI) SendAIMessage(text string) (string, error) {
 	}
 	if !st.Ready() {
 		return "", fmt.Errorf("AI 尚未配置完成：请选择供应商、填好 Base URL 与 API Key")
+	}
+	if err := a.ensureExternalNotice(st); err != nil {
+		return "", err
 	}
 
 	a.mu.Lock()
@@ -203,63 +227,64 @@ func (a *AIAPI) SendAIMessage(text string) (string, error) {
 	a.runID = runID
 	a.cancel = cancel
 	a.conv = append(a.conv, llm.Message{Role: "user", Content: text, CreatedAt: time.Now().UnixMilli()})
-	messages := a.historyLocked()
+	history := append([]llm.Message{}, a.conv...)
 	a.mu.Unlock()
 
 	a.emit(events.EvAIStart, map[string]any{
-		"id": runID, "provider": st.Provider, "model": st.Model,
+		"id": runID, "provider": st.Provider, "model": st.Model, "task": string(tk),
 	})
 	a.emitStatus()
 
-	go a.run(ctx, cancel, runID, st, messages)
+	go a.run(ctx, cancel, runID, st, tk, text, history)
 	return runID, nil
 }
 
-// run 执行一次流式调用并把增量推给前端。
-func (a *AIAPI) run(ctx context.Context, cancel context.CancelFunc, runID string, st llm.Settings, messages []llm.Message) {
+// run 执行「流式 + 工具调用回喂」循环，把增量/工具事件/确认请求推给前端。
+func (a *AIAPI) run(ctx context.Context, cancel context.CancelFunc, runID string, st llm.Settings, task agent.Task, text string, history []llm.Message) {
 	defer cancel()
 
-	client := llm.NewClient(st)
-	start := time.Now()
-	var content, reasoning strings.Builder
-	lastFlush := time.Now()
-	flushedText, flushedReasoning := 0, 0
+	sess := a.sessionFor(text, st.Model)
+	exec := agent.NewExecutor(&agentHost{s: a.s}, a.confirmer(runID))
+	temp := st.Temperature
+	runner := &agent.Runner{
+		Client:      llm.NewClient(st),
+		Model:       st.Model,
+		MaxTokens:   st.MaxTokens,
+		Temperature: &temp,
+		Exec:        exec,
+		Session:     sess,
+		Emit:        a.emit,
+		RunID:       runID,
+	}
+	msgs := runner.BuildMessages(task, a.buildContext(), history)
 
 	// 合批推送：token 级事件直接推给 WebView 会造成事件风暴（100Hz 数据流已经占满通道）。
-	// force=true 用于补最后一段，避免「回答太快、一帧都没推」的情况。
-	emitDelta := func(force bool) {
+	// force=true 用于补最后一段，避免「回答太快、一帧都没推」。
+	var bufText, bufReason strings.Builder
+	lastFlush := time.Now()
+	flushedT, flushedR := 0, 0
+	flush := func(force bool) {
 		if !force && time.Since(lastFlush) < 60*time.Millisecond {
 			return
 		}
-		text := content.String()[flushedText:]
-		reason := reasoning.String()[flushedReasoning:]
-		if text == "" && reason == "" {
+		t, r := bufText.String(), bufReason.String()
+		dt, dr := t[flushedT:], r[flushedR:]
+		if dt == "" && dr == "" {
 			return
 		}
-		flushedText, flushedReasoning = content.Len(), reasoning.Len()
+		flushedT, flushedR = len(t), len(r)
 		lastFlush = time.Now()
-		a.emit(events.EvAIDelta, map[string]any{
-			"id": runID, "text": text, "reasoning": reason,
-		})
+		a.emit(events.EvAIDelta, map[string]any{"id": runID, "text": dt, "reasoning": dr})
 	}
 
-	temp := st.Temperature
-	resp, err := client.ChatStream(ctx, llm.ChatRequest{
-		Model:       st.Model,
-		Messages:    messages,
-		Temperature: &temp,
-		MaxTokens:   st.MaxTokens,
-	}, func(d llm.Delta) error {
-		if d.Content != "" {
-			content.WriteString(d.Content)
-		}
-		if d.Reasoning != "" {
-			reasoning.WriteString(d.Reasoning)
-		}
-		emitDelta(false)
+	start := time.Now()
+	res, err := runner.Run(ctx, task, msgs, func(content, reasoning string) error {
+		bufText.WriteString(content)
+		bufReason.WriteString(reasoning)
+		flush(false)
 		return nil
 	})
-	emitDelta(true)
+	flush(true)
 
 	elapsed := time.Since(start).Milliseconds()
 	canceled := ctx.Err() == context.Canceled
@@ -267,45 +292,42 @@ func (a *AIAPI) run(ctx context.Context, cancel context.CancelFunc, runID string
 	a.mu.Lock()
 	a.running = false
 	a.cancel = nil
-	finalContent := content.String()
-	if finalContent == "" && resp != nil {
-		// 极端情况：只有 finish 帧、正文靠非流式兜底（少数代理会这样）
-		finalContent = resp.Content()
-	}
-	if reasoning.Len() == 0 && resp != nil {
-		reasoning.WriteString(resp.Reasoning())
-	}
-	if finalContent != "" {
+	if res != nil && res.Content != "" {
 		a.conv = append(a.conv, llm.Message{
-			Role: "assistant", Content: finalContent, ReasoningContent: reasoning.String(),
-			CreatedAt: time.Now().UnixMilli(),
+			Role: "assistant", Content: res.Content, CreatedAt: time.Now().UnixMilli(),
 		})
 		a.trimLocked()
 	}
 	a.mu.Unlock()
 
 	if err != nil && !canceled && !strings.Contains(err.Error(), "context canceled") {
-		msg := llm.FriendlyError(err)
-		a.emit(events.EvAIError, map[string]any{"id": runID, "message": msg})
+		a.emit(events.EvAIError, map[string]any{"id": runID, "message": llm.FriendlyError(err)})
 		a.emitStatus()
 		return
 	}
 
 	payload := map[string]any{
-		"id": runID, "content": finalContent, "reasoning": reasoning.String(),
-		"elapsed_ms": elapsed, "canceled": canceled,
+		"id": runID, "canceled": canceled, "elapsed_ms": elapsed,
 	}
-	if resp != nil {
-		payload["first_ms"] = resp.FirstDeltaMS
-		payload["finish_reason"] = resp.FinishReason()
-		payload["model"] = resp.Model
-		if resp.Usage != nil {
+	if res != nil {
+		payload["content"] = res.Content
+		payload["reasoning"] = res.Reasoning
+		payload["rounds"] = res.Rounds
+		payload["tool_calls"] = res.ToolCalls
+		payload["finish_reason"] = res.FinishText
+		if res.FirstMS > 0 {
+			payload["first_ms"] = res.FirstMS
+		}
+		if res.Usage != nil {
 			payload["usage"] = map[string]any{
-				"prompt_tokens":     resp.Usage.PromptTokens,
-				"completion_tokens": resp.Usage.CompletionTokens,
-				"total_tokens":      resp.Usage.TotalTokens,
+				"prompt_tokens":     res.Usage.PromptTokens,
+				"completion_tokens": res.Usage.CompletionTokens,
+				"total_tokens":      res.Usage.TotalTokens,
 			}
 		}
+	}
+	if sess != nil {
+		payload["session_id"] = sess.ID()
 	}
 	a.emit(events.EvAIDone, payload)
 	a.emitStatus()
@@ -323,10 +345,12 @@ func (a *AIAPI) CancelAI() error {
 	return nil
 }
 
-// ClearAIConversation 清空会话上下文（不影响设置）。
+// ClearAIConversation 清空上下文并结束当前会话文件（下一轮会新建）。
 func (a *AIAPI) ClearAIConversation() error {
 	a.mu.Lock()
 	a.conv = nil
+	a.sess = nil
+	a.sessProject = ""
 	a.mu.Unlock()
 	a.emitStatus()
 	return nil
@@ -360,72 +384,221 @@ func (a *AIAPI) GetAIStatus() map[string]any {
 	return masked
 }
 
-// ---------- 内部 ----------
+// ---------- 工具调用：确认桥 / 上下文 / 会话 ----------
 
-// historyLocked 组装 system + 历史（调用方持锁）。
-func (a *AIAPI) historyLocked() []llm.Message {
-	out := make([]llm.Message, 0, len(a.conv)+2)
-	if sys := a.systemPrompt(); sys != "" {
-		out = append(out, llm.Message{Role: "system", Content: sys})
+// ensureExternalNotice 首次发送前的数据外发告知（PRD §4.8）。
+//
+// 用系统原生对话框（Wails v3 MessageDialog）拦一次：用户点「继续」才落盘 notice_ack，
+// 之后不再打扰。本地端点（Ollama/自建 localhost）不外发数据，直接放行。
+func (a *AIAPI) ensureExternalNotice(st llm.Settings) error {
+	if st.NoticeAck || llm.IsLocalEndpoint(st.BaseURL) {
+		return nil
 	}
-	out = append(out, a.conv...)
-	return out
+	app := application.Get()
+	if app == nil {
+		return nil // 无 UI 场景（CLI/测试）不拦
+	}
+
+	approved := false
+	dlg := app.Dialog.Question().SetTitle("数据外发提示")
+	okBtn := dlg.AddButton("继续")
+	okBtn.OnClick(func() { approved = true })
+	cancelBtn := dlg.AddButton("取消")
+	cancelBtn.SetAsCancel()
+	if win := app.Window.Current(); win != nil {
+		dlg.AttachToWindow(win)
+	}
+	dlg.SetDefaultButton(okBtn).SetCancelButton(cancelBtn)
+	dlg.SetMessage(fmt.Sprintf(
+		"AI 助手会把当前脚本、样本帧摘要和你的提问发送到 %s（模型 %s），用于生成解码脚本。\n\n是否继续？",
+		llm.EndpointHost(st.BaseURL), st.Model,
+	))
+	dlg.Show()
+
+	if !approved {
+		return fmt.Errorf("已取消：未确认数据外发，未发送任何内容")
+	}
+	if err := a.store.MarkNoticeAck(); err != nil {
+		return nil // 记录失败不影响使用（下次再问一次而已）
+	}
+	return nil
 }
 
-// systemPrompt 每次现拼：脚本内容会变，缓存的 prompt 会误导模型。
-func (a *AIAPI) systemPrompt() string {
-	st, _ := a.store.Load()
-	var b strings.Builder
-	b.WriteString("你是 SerialLens 的串口协议脚本助手。SerialLens 通过 Lua 脚本把串口字节流解析成结构化字段并绘图。\n")
-	b.WriteString("职责边界：只做「生成/修复 Lua 解码脚本」和「解释字段含义」；与串口协议无关的请求，用一句话说明不支持并引导回协议话题。\n")
-	b.WriteString("数据流：串口原始字节先按 detect_frame（可选）切帧，再以**字符串**（Lua 的 string，按字节索引、下标从 1 开始）传给 on_frame(raw)。\n")
-	b.WriteString("要求：\n")
-	b.WriteString("1. 输出可直接运行的完整 Lua 代码，放在 ```lua 代码块里；字段必须是 table（字段名 -> 值）。\n")
-	b.WriteString("2. 数值字段用 emit_chart 推给图表时才需要图表配置；不确定通道名就沿用已有通道。\n")
-	b.WriteString("3. 不要编造不存在的内置函数；只能用下面清单里的 API。\n")
-	b.WriteString("4. 解释保持简短（3 句以内），代码优先。\n")
-
-	b.WriteString("\n可用内置 API：\n")
-	for _, d := range lua.APIManifest() {
-		b.WriteString("- ")
-		b.WriteString(d.Call)
-		b.WriteString(" → ")
-		b.WriteString(d.Returns)
-		b.WriteString("；")
-		b.WriteString(d.Doc)
-		b.WriteString("\n")
+// ResolveAIConfirm UI 回填确认结果（应用/放弃、写入/不写入）。
+func (a *AIAPI) ResolveAIConfirm(id string, approved bool) error {
+	a.mu.Lock()
+	ch := a.pending[id]
+	a.mu.Unlock()
+	if ch == nil {
+		return fmt.Errorf("确认请求已失效或已处理")
 	}
-
-	if name, src := a.currentScript(); src != "" {
-		b.WriteString("\n当前脚本（")
-		b.WriteString(name)
-		b.WriteString("）：\n```lua\n")
-		b.WriteString(truncateRunes(src, 6000))
-		b.WriteString("\n```\n")
+	select {
+	case ch <- approved:
+	default: // 重复点击：忽略
 	}
-	if extra := strings.TrimSpace(st.SystemExtra); extra != "" {
-		b.WriteString("\n工程偏好：")
-		b.WriteString(extra)
-		b.WriteString("\n")
-	}
-	return b.String()
+	return nil
 }
 
-// currentScript 取当前工程的活动脚本（没有工程/脚本时返回空）。
-func (a *AIAPI) currentScript() (string, string) {
-	if a.s == nil || a.s.scripts == nil {
-		return "", ""
+// confirmer 把 agent 的确认请求转成 UI 事件并阻塞等待。
+func (a *AIAPI) confirmer(runID string) agent.Confirmer {
+	return agent.ConfirmerFunc(func(ctx context.Context, req agent.ConfirmRequest) (bool, error) {
+		ch := make(chan bool, 1)
+		a.mu.Lock()
+		if a.pending == nil {
+			a.pending = map[string]chan bool{}
+		}
+		a.pending[req.ID] = ch
+		a.mu.Unlock()
+		defer func() {
+			a.mu.Lock()
+			delete(a.pending, req.ID)
+			a.mu.Unlock()
+		}()
+
+		a.emit(events.EvAIConfirm, map[string]any{
+			"id": req.ID, "run_id": runID, "kind": req.Kind,
+			"title": req.Title, "description": req.Description,
+			"target": req.Target, "content": truncateRunes(req.Content, 20000), "diff": req.Diff,
+		})
+		select {
+		case v := <-ch:
+			return v, nil
+		case <-ctx.Done():
+			return false, ctx.Err()
+		}
+	})
+}
+
+// buildContext 组装本次请求的工程上下文（PRD §4.5.1）。
+func (a *AIAPI) buildContext() agent.Context {
+	c := agent.Context{}
+	if st, err := a.store.Load(); err == nil {
+		c.SystemExtra = st.SystemExtra
 	}
-	name := a.s.scripts.Active()
-	if name == "" {
-		return "", ""
+	if a.s == nil {
+		return c
 	}
-	src, err := a.s.scripts.Read(name)
+	if a.s.Project != nil {
+		if dir, meta, ok := a.s.Project.svc.Current(); ok && meta != nil {
+			c.ProjectName = meta.Name
+			c.ContextHints = meta.AgentSettings.ContextHints
+			if cfg := a.s.charts.Config(); cfg != nil {
+				c.Charts, _ = chartsToMap(cfg)
+			}
+			c.Samples, _ = agent.NewSampleStore(dir).List(10)
+		}
+	}
+	if a.s.scripts == nil {
+		return c
+	}
+	c.ActiveScript = a.s.scripts.Active()
+	c.Scripts = (&agentHost{s: a.s}).ScriptNames()
+	if c.ActiveScript != "" {
+		c.ScriptSource, _ = a.s.scripts.Read(c.ActiveScript)
+	}
+	return c
+}
+
+// sessionFor 复用/新建 JSONL 会话（按工程隔离；切工程自动换文件）。
+func (a *AIAPI) sessionFor(text, model string) *agent.Session {
+	dir := ""
+	if a.s != nil && a.s.Project != nil {
+		if d, _, ok := a.s.Project.svc.Current(); ok {
+			dir = d
+		}
+	}
+	if dir == "" {
+		return nil
+	}
+
+	a.mu.Lock()
+	if a.sess != nil && a.sessProject == dir {
+		sess := a.sess
+		a.mu.Unlock()
+		sess.Append(agent.SessionEvent{Type: agent.EvSessionMessage, Role: "user", Content: text})
+		return sess
+	}
+	a.mu.Unlock()
+
+	sess, err := agent.NewSession(dir, "")
 	if err != nil {
-		return name, ""
+		return nil
 	}
-	return name, src
+	sess.Append(agent.SessionEvent{Type: agent.EvSessionMeta, Model: model, Title: firstLine(text, 40)})
+	sess.Append(agent.SessionEvent{Type: agent.EvSessionMessage, Role: "user", Content: text})
+
+	a.mu.Lock()
+	a.sess, a.sessProject = sess, dir
+	a.mu.Unlock()
+
+	a.emit(events.EvAISession, map[string]any{"session_id": sess.ID(), "path": sess.Path()})
+	return sess
 }
+
+// ListAISessions 当前工程的会话列表（按更新时间倒序）。
+func (a *AIAPI) ListAISessions() ([]agent.SessionSummary, error) {
+	dir := ""
+	if a.s != nil && a.s.Project != nil {
+		if d, _, ok := a.s.Project.svc.Current(); ok {
+			dir = d
+		}
+	}
+	if dir == "" {
+		return nil, nil
+	}
+	return agent.ListSessions(dir)
+}
+
+// LoadAISession 载入历史会话（恢复对话上下文 + 返回事件流给前端渲染）。
+func (a *AIAPI) LoadAISession(id string) (map[string]any, error) {
+	dir := ""
+	if a.s != nil && a.s.Project != nil {
+		if d, _, ok := a.s.Project.svc.Current(); ok {
+			dir = d
+		}
+	}
+	if dir == "" {
+		return nil, fmt.Errorf("no project open")
+	}
+	sess, err := agent.NewSession(dir, id)
+	if err != nil {
+		return nil, err
+	}
+	events, err := agent.LoadEvents(sess.Path())
+	if err != nil {
+		return nil, err
+	}
+
+	conv := make([]llm.Message, 0, len(events))
+	for _, e := range events {
+		if e.Type != agent.EvSessionMessage || e.Content == "" {
+			continue
+		}
+		if e.Role != "user" && e.Role != "assistant" {
+			continue
+		}
+		conv = append(conv, llm.Message{Role: e.Role, Content: e.Content})
+	}
+
+	a.mu.Lock()
+	a.conv = conv
+	a.sess, a.sessProject = sess, dir
+	a.mu.Unlock()
+	a.emitStatus()
+	return map[string]any{"id": sess.ID(), "path": sess.Path(), "events": events}, nil
+}
+
+// GetAISessionInfo 当前会话 id（前端 header 显示/高亮用）。
+func (a *AIAPI) GetAISessionInfo() map[string]any {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.sess == nil {
+		return map[string]any{"id": "", "path": ""}
+	}
+	return map[string]any{"id": a.sess.ID(), "path": a.sess.Path()}
+}
+
+// ---------- 内部 ----------
 
 // trimLocked 控制上下文长度：保留最近 24 条（约 4~8 轮），超长单条会整条保留。
 func (a *AIAPI) trimLocked() {
@@ -455,4 +628,16 @@ func truncateRunes(s string, n int) string {
 		return s
 	}
 	return string(r[:n]) + "\n-- …（已截断）"
+}
+
+func firstLine(s string, max int) string {
+	s = strings.TrimSpace(s)
+	if i := strings.IndexByte(s, '\n'); i >= 0 {
+		s = s[:i]
+	}
+	r := []rune(s)
+	if len(r) > max {
+		return string(r[:max]) + "…"
+	}
+	return s
 }
