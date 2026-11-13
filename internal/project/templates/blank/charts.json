@@ -1,0 +1,5 @@
+{
+  "version": "1.0",
+  "layout": { "grid": { "cols": 12, "row_height": 80 } },
+  "widgets": []
+}
