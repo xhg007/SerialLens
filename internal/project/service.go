@@ -182,6 +182,32 @@ func (s *Service) Close() error {
 	return nil
 }
 
+// SetActiveScript 切换活动脚本并写回 project.json（PRD §F4 脚本管理）。
+// 只改元数据，不负责装载——装载时机由调用方决定（编辑器面板切文件 / 重命名）。
+func (s *Service) SetActiveScript(name string) error {
+	s.mu.Lock()
+	dir, meta := s.current, s.meta
+	closed := s.state != StateProjectOpen
+	s.mu.Unlock()
+	if closed || dir == "" || meta == nil {
+		return fmt.Errorf("no project open")
+	}
+	next := *meta
+	next.ActiveScript = name
+	if err := Validate(&next); err != nil {
+		return err
+	}
+	if err := SaveMeta(dir, &next); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	if s.current == dir {
+		s.meta = &next
+	}
+	s.mu.Unlock()
+	return nil
+}
+
 func openedPayload(dir string, meta *ProjectMeta) map[string]any {
 	sc := meta.SerialConfig
 	return map[string]any{

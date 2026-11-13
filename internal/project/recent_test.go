@@ -29,7 +29,7 @@ func TestRecentListOrderNewestFirst(t *testing.T) {
 func TestRecentCapTwentyKeepsPinned(t *testing.T) {
 	r := newStore(t)
 	for i := 0; i < 20; i++ {
-		r.RecordOpen("/" + string(rune('a'+i)), "")
+		r.RecordOpen("/"+string(rune('a'+i)), "")
 		time.Sleep(5 * time.Millisecond)
 	}
 	r.SetPinned("/a", true)

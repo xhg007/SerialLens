@@ -15,6 +15,7 @@ import (
 	"seriallens/internal/lua"
 	"seriallens/internal/parser"
 	"seriallens/internal/project"
+	"seriallens/internal/scripts"
 )
 
 // Services 装配层：把串口、Lua 运行时、解析管线、工程域按 PRD §7.2 的数据流连起来。
@@ -27,10 +28,12 @@ type Services struct {
 	Serial  *SerialService
 	Parser  *ParserAPI
 	Charts  *ChartsAPI
+	Editor  *EditorAPI
 
 	runtime *lua.Runtime
 	pipe    *parser.Service
 	charts  *charts.Service
+	scripts *scripts.Service
 
 	mu   sync.RWMutex
 	emit events.Emitter
@@ -54,9 +57,15 @@ func NewServices() *Services {
 	s.pipe = parser.New(parser.Options{Runtime: s.runtime, Emit: s.emitEvent})
 	s.Serial.SetRawTap(s.pipe.Ingest)
 	s.charts = charts.NewService(s.emitEvent)
+	s.scripts = scripts.New(s.emitEvent)
+	// 装载器指向同一份解析管线：保存即生效、外部编辑热重载都走它。
+	s.scripts.SetLoader(func(name string, src []byte) error {
+		return s.pipe.LoadScriptSource(name, src)
+	})
 	s.Project = newProjectService(s)
 	s.Parser = &ParserAPI{s: s}
 	s.Charts = &ChartsAPI{s: s}
+	s.Editor = &EditorAPI{s: s}
 	s.Project.svc.SetHooks(&switchHooks{s: s})
 	return s
 }
@@ -76,6 +85,7 @@ func (s *Services) install(app *application.App) {
 		s.Project.svc.SetEmitter(em)
 		s.Serial.SetEmitter(em)
 		s.charts.SetEmitter(em)
+		s.scripts.SetEmitter(em)
 		s.pipe.Start()
 	})
 }
@@ -91,6 +101,7 @@ func (s *Services) emitEvent(event string, payload map[string]any) {
 
 // Shutdown 释放运行时资源（应用退出）。
 func (s *Services) Shutdown() {
+	s.scripts.Close()
 	s.charts.Close()
 	s.pipe.Stop()
 	s.runtime.Close()
@@ -99,24 +110,34 @@ func (s *Services) Shutdown() {
 // switchHooks 实现 project.SwitchHooks：工程切换时的外部资源拆卸/装载。
 type switchHooks struct{ s *Services }
 
-// BeforeSwitch 顺序按 PRD §3.8：先断串口，再清 Lua 字节码，最后停图表监听。
+// BeforeSwitch 顺序按 PRD §3.8：先断串口，再清 Lua 字节码，最后停图表/脚本监听。
 func (h *switchHooks) BeforeSwitch() error {
 	if err := h.s.Serial.Disconnect(); err != nil {
 		return fmt.Errorf("disconnect serial: %w", err)
 	}
 	h.s.pipe.Clear()
 	h.s.charts.Close()
+	h.s.scripts.Close()
 	return nil
 }
 
-// AfterOpen 加载新工程的 active_script 与 charts.json；任一失败都不关闭工程。
+// AfterOpen 加载新工程的 active_script、charts.json 与脚本目录监听；任一失败都不关闭工程。
 func (h *switchHooks) AfterOpen(dir string, meta *project.ProjectMeta) {
-	if meta != nil && meta.ActiveScript != "" {
-		if err := h.s.pipe.LoadScript(dir, meta.ActiveScript); err != nil {
+	active := ""
+	if meta != nil {
+		active = meta.ActiveScript
+	}
+	if active != "" {
+		if err := h.s.pipe.LoadScript(dir, active); err != nil {
+			d := lua.DiagnosticFromError(active, err)
 			h.s.emitEvent(events.EvScriptError, map[string]any{
-				"script": meta.ActiveScript, "error": err.Error(), "line": 0,
+				"script": active, "error": d.Message, "line": d.Line, "column": d.Column,
 			})
 		}
+	}
+	// 没有 active_script 也要监听：用户可能刚在外部 IDE 里新建脚本。
+	if err := h.s.scripts.Open(dir, active); err != nil {
+		h.s.emitEvent(events.EvScriptError, map[string]any{"script": "", "error": err.Error(), "line": 0})
 	}
 	// 图表配置独立加载：脚本坏了图表仍可展示；charts:error 由 charts.Service 自行上报。
 	_ = h.s.charts.Load(dir)

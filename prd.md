@@ -108,6 +108,14 @@
 - 保存时 Go 侧编译校验，错误行号回显编辑器
 - 脚本管理基于当前工程 `scripts/` 目录：新建/复制/重命名/删除
 - fsnotify 热重载（100ms 防抖），外部 IDE 修改同样生效
+
+> **实现状态（2026-11-13，M4）**：
+> - 补全与悬停的数据源是 Go 侧 `lua.APIManifest()`（与内置函数注册表同源，测试比对防漂移）；`on_frame`/`detect_frame`/`encode_command` 三个回调也进补全。
+> - 保存语义：**内容先落盘**（绝不吞用户编辑）→ 编译校验 → 活动脚本立即热装载；编译失败只报诊断（行/列/消息 → Monaco marker + 底部红条），**旧脚本继续解析**。
+> - 文件管理：新建/复制/重命名/删除/设为活动；重命名活动脚本会同步 `project.json`，删除活动脚本被拒绝。
+> - 外部 IDE 修改：fsnotify 100ms 防抖 → 本地无未保存修改则直接跟随；有未保存修改则弹「采用磁盘版本 / 保留我的修改」，**绝不静默覆盖**。
+> - 试运行：编辑器当前内容 + hex 样本 → 一次性 Runtime 执行 `on_frame`，不碰在线脚本与串口（`send_bytes` 在试运行中直接报错）。
+> - 快捷键：Ctrl+S 保存，Ctrl+E 收起/展开编辑器。
 ### F5 图表可视化
 - 渲染引擎：uPlot（高频折线）+ ECharts（仪表/柱状/指示灯）
 - **charts.json 完全驱动**：widget 类型/布局/通道绑定/量程/颜色全部由配置决定
@@ -653,7 +661,7 @@ const (
 | **M1 骨架** | 第 1 周 | Wails3 工程 + SerialService + 终端回显 + 工程切换器 UI | 115200 稳定收发 0 丢包；UI 不冻结（**实测见 `docs/acceptance/m0-m1.md`**） |
 | **M2 Lua 引擎** | 第 2~3 周 | LuaRuntime + 池 + 沙箱 + 全量内置 API + frame:parsed | Modbus 示例脚本解析正确；`-race` 下 100 goroutine 并发压测通过；1Mbps 持续 10 分钟 0 崩溃（**实测见 `docs/acceptance/m2-lua-runtime.md`**） |
 | **M3 图表** | 第 4 周 | ChartsService + charts.json 加载 + uPlot/ECharts 渲染 | 10 通道 × 100Hz 流畅；外部编辑 charts.json 实时同步（**实测见 `docs/acceptance/m3-charts.md`**） |
-| **M4 编辑器+热重载** | 第 5 周 | Monaco + fsnotify + 保存即生效 + 错误行号回显 | 修改脚本 < 100ms 生效 |
+| **M4 编辑器+热重载** | 第 5 周 | Monaco + fsnotify + 保存即生效 + 错误行号回显 | 修改脚本 < 100ms 生效（**实测见 `docs/acceptance/m4-editor.md`**） |
 | **M5 AI Agent** | 第 6~7 周 | 双任务状态机 + JSONL 会话 + 12 工具 + Diff 确认 + charts 联动 | 首试通过率 ≥ 50%，3 轮自修复 ≥ 85%；安全用例 100%；eval 集成 CI |
 | **M6 收尾** | 第 8 周 | 录制回放、命令面板、3 工程模板、zip 导入导出、打包 | 三平台安装包 < 30MB；冷启动 < 2s；工程跨机迁移打开即用 |
 ---
@@ -756,6 +764,19 @@ end
 | 默认模板 | 空白模板预置「主折线 + 仪表 + 字段表」，全部 `channels:"auto"` | 新工程打开即有图可看；脚本改通道不用同步改配置 |
 | BOM | 读取时 `trimBOM` | 记事本 / PowerShell 5.1 的 UTF-8 带 BOM，实测直接解析失败 |
 | 拖拽布局 | **M3 未实现**，接口 `SaveChartsConfig` 已就绪 | M3 验收只要求渲染与热同步；拖拽与编辑器联动一起做更省事 |
+## 10.7 实现裁决记录（M4，2026-11-13）
+| 议题 | 裁决 | 原因 |
+|---|---|---|
+| 补全清单来源 | Go 侧 `lua.APIManifest()` 单一来源，经 Wails 绑定下发 | 前端手抄一份必然漂移；`TestManifestMatchesRegisteredGlobals` 保证「提示了但运行时 nil」不可能出现 |
+| 保存语义 | **先落盘再校验**；编译失败旧脚本继续解析 | 吞用户编辑不可接受；换上坏脚本会让串口数据直接断流，暂用旧逻辑是更好的降级 |
+| 自写判定 | 沿用 M3 的内容摘要方案（FNV→SHA1 摘要比对） | 时间窗会把紧邻的真实外部编辑吃掉 |
+| 外部修改 vs 本地未保存 | 弹「采用磁盘版本 / 保留我的修改」，绝不静默覆盖 | 静默覆盖 = 用户丢工作；两条路都必须显式确认 |
+| Monaco 装配 | `editor.api` + 7 个 contrib + 单语言 register，`React.lazy` 独立 chunk | 整包 monaco（60+ 语言 + TS 服务）≈5MB；分包后主包 587KB 不变，编辑器 chunk 3.3MB 按需加载 |
+| 撤销栈 | 每个脚本文件一个 `ITextModel` | 单 model + setValue 会把跨文件的撤销历史串在一起 |
+| 切换文件的脏检查 | WebView2 里 `window.confirm` 不可靠，改为**先保存再切换** | 丢用户输入比多一次写盘严重得多；保存失败时文件也已落盘 |
+| 试运行隔离 | 一次性 `lua.Runtime`，`send_bytes` sink 替换为报错 | 沙箱试跑绝不能触达硬件；在线脚本/字节码完全不受影响 |
+| 活动脚本改名 | 同步改写 `project.json` 并按新名装载 | 否则重开工程后 active_script 指向已不存在的旧名字 |
+| 事件契约 | 新增 `script:changed`/`script:list`；`script:reloaded` 增加 `source`/`compile_ms`/`load_ms` | 前端需要区分「自己写的」与「外部改的」，耗时字段是验收证据 |
 ---
 ## 落地要点总结
 1. **先建 eval，再写 Agent**：`internal/agent/eval/` 样本集在 M5 开始前就要有骨架，prompt 调优不能盲改；
