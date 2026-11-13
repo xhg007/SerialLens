@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "mcp-wails3-dev": {
+      "type": "streamable-http",
+      "url": "http://127.0.0.1:9099/mcp",
+      "disabled": true
+    }
+  }
+}
