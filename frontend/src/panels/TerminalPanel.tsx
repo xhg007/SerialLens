@@ -5,6 +5,11 @@ import { useTerminalStore } from "../stores/terminal";
 const TOOLBTN =
   "rounded-panel border border-border px-2 py-0.5 text-xs text-text-2 hover:border-accent hover:text-accent";
 
+// 渲染窗口：store 保留 5000 行历史，DOM 只渲染最近 1200 行。
+// 实测满额 5000 行全量渲染时每批数据要 50~60ms 主线程（约 15fps、20s 内 46 个 long task）；
+// 裁剪到 1200 行后回落到 60fps 量级。完整虚拟滚动留待 M3。
+const VIEW_LINES = 1200;
+
 export function TerminalPanel() {
   const { lines, paused, fullscreen, togglePause, clear, toggleFullscreen } = useTerminalStore();
   const { state, send } = useConnectionStore();
@@ -19,6 +24,9 @@ export function TerminalPanel() {
     if (!filter) return lines;
     return lines.filter((l) => l.hex.toUpperCase().includes(filter.toUpperCase()));
   }, [lines, filter]);
+
+  const hiddenCount = Math.max(0, filtered.length - VIEW_LINES);
+  const visible = hiddenCount > 0 ? filtered.slice(hiddenCount) : filtered;
 
   // 自动滚动：暂停或用户上滚时停止
   useEffect(() => {
@@ -56,7 +64,12 @@ export function TerminalPanel() {
       className="min-h-0 flex-1 overflow-auto bg-bg-0 px-2 py-1 text-sm leading-relaxed"
     >
       {filtered.length === 0 && <div className="text-text-2">等待数据…</div>}
-      {filtered.map((l) => (
+      {hiddenCount > 0 && (
+        <div className="text-text-2">
+          … 已折叠更早的 {hiddenCount} 行（内存保留 5000 行，可用过滤检索）
+        </div>
+      )}
+      {visible.map((l) => (
         <div key={l.id} className="term-row whitespace-pre">
           <span className="text-text-2">{ts(l.ts)}</span>
           <span className={`mx-2 ${l.direction === "rx" ? "text-rx" : "text-tx"}`}>
