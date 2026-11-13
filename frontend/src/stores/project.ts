@@ -19,8 +19,17 @@ export interface ProjectState {
   closeProject: () => Promise<void>;
   refreshRecents: () => Promise<void>;
   removeRecent: (path: string) => Promise<void>;
+  /** 目录探测（文件选择器选完后先确认是「已有工程」还是「空目录」） */
+  inspectDir: (dir: string) => Promise<DirInfo>;
   /** 与后端对账当前工程（页面重载 / HMR 后恢复，事件补不回来时兜底） */
   syncCurrent: () => Promise<void>;
+}
+
+export interface DirInfo {
+  path: string;
+  exists: boolean;
+  is_project: boolean;
+  name: string;
 }
 
 // HMR 安全：模块重新求值时先取消旧订阅，避免 dev 下事件双触发。
@@ -75,6 +84,10 @@ export const useProjectStore = create<ProjectState>((set, get) => {
       await ProjectService.RemoveRecentProject(path);
       // 事件之外再兜底刷新一次，避免事件丢失导致 UI 不同步
       await get().refreshRecents();
+    },
+    inspectDir: async (dir) => {
+      const info = (await ProjectService.InspectProjectDir(dir)) as Partial<DirInfo> | null;
+      return { path: dir, exists: false, is_project: false, name: "", ...info };
     },
     syncCurrent: refreshCurrent,
   };

@@ -27,10 +27,10 @@ func Providers() []Provider {
 			ID:       "deepseek",
 			Name:     "DeepSeek",
 			BaseURL:  "https://api.deepseek.com/v1",
-			Models:   []string{"deepseek-chat", "deepseek-reasoner"},
+			Models:   []string{"deepseek-flash", "deepseek-v4-pro"},
 			KeyURL:   "https://platform.deepseek.com/api_keys",
 			DocURL:   "https://api-docs.deepseek.com/",
-			Note:     "deepseek-chat 通用；deepseek-reasoner 会先输出思维链（reasoning_content）",
+			Note:     "deepseek-flash 通用；deepseek-flash 会先输出思维链（reasoning_content）",
 			NeedsKey: true,
 		},
 		{

@@ -2,6 +2,7 @@ package app
 
 import (
 	"context"
+	"os"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 
@@ -72,6 +73,25 @@ func (p *ProjectService) GetCurrentProject() map[string]any {
 		return map[string]any{"ok": false}
 	}
 	return map[string]any{"ok": true, "path": dir, "meta": meta}
+}
+
+// InspectProjectDir 探测目录状态，供系统文件选择器选完目录后即时反馈。
+//
+// 直接调用 OpenProject 只会抛「read project.json: 找不到文件」，用户不知道
+// 是选错目录还是工程损坏；先探测一次就能给出准确提示（是工程 → 直接打开，
+// 是空目录 → 建议新建）。
+func (p *ProjectService) InspectProjectDir(dir string) map[string]any {
+	out := map[string]any{"path": dir, "exists": false, "is_project": false, "name": ""}
+	st, err := os.Stat(dir)
+	if err != nil || !st.IsDir() {
+		return out
+	}
+	out["exists"] = true
+	if meta, err := project.LoadMeta(dir); err == nil {
+		out["is_project"] = true
+		out["name"] = meta.Name
+	}
+	return out
 }
 
 // ListRecentProjects 返回最近工程（已标记失效条目）。

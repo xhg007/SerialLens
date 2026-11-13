@@ -90,6 +90,7 @@ declare global {
     __slDevEditorSave?: () => Promise<Record<string, unknown> | null>;
     __slDevWaitField?: (name: string, timeoutMs?: number) => Promise<number>;
     __slDevLastFields?: () => string[];
+    __slDevInspectDir?: (dir: string) => Promise<Record<string, unknown>>;
     __slDevAISave?: (patch: Record<string, unknown>) => Promise<Record<string, unknown> | null>;
     __slDevAITest?: (patch: Record<string, unknown>) => Promise<string>;
     __slDevAISend?: (text: string) => Promise<void>;
@@ -184,6 +185,10 @@ window.__slDevAISend = async (text) => {
 };
 window.__slDevAICancel = async () => {
   await useAIStore.getState().cancel();
+};
+window.__slDevInspectDir = async (dir) => {
+  const info = await useProjectStore.getState().inspectDir(dir);
+  return { ...info } as unknown as Record<string, unknown>;
 };
 window.__slDevAIState = () => {
   const s = useAIStore.getState();

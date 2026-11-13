@@ -27,6 +27,17 @@ export function GetCurrentProject(): $CancellablePromise<{ [_ in string]?: any }
 }
 
 /**
+ * InspectProjectDir 探测目录状态，供系统文件选择器选完目录后即时反馈。
+ * 
+ * 直接调用 OpenProject 只会抛「read project.json: 找不到文件」，用户不知道
+ * 是选错目录还是工程损坏；先探测一次就能给出准确提示（是工程 → 直接打开，
+ * 是空目录 → 建议新建）。
+ */
+export function InspectProjectDir(dir: string): $CancellablePromise<{ [_ in string]?: any } | null> {
+    return $Call.ByID(952215901, dir);
+}
+
+/**
  * ListRecentProjects 返回最近工程（已标记失效条目）。
  */
 export function ListRecentProjects(): $CancellablePromise<({ [_ in string]?: any } | null)[] | null> {
