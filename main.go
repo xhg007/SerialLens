@@ -25,6 +25,7 @@ func main() {
 			application.NewService(services.Parser),
 			application.NewService(services.Charts),
 			application.NewService(services.Editor),
+			application.NewService(services.AI),
 		},
 		Assets: application.AssetOptions{
 			Handler: application.AssetFileServerFS(assets),

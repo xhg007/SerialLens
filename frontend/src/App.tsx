@@ -12,12 +12,16 @@ import { useParserStore } from "./stores/parser";
 const EditorPanel = lazy(() =>
   import("./panels/EditorPanel").then((m) => ({ default: m.EditorPanel })),
 );
+const AIPanel = lazy(() => import("./panels/AIPanel").then((m) => ({ default: m.AIPanel })));
 
-const EDITOR_BTN =
+const BTN =
   "rounded-panel border border-border px-2 py-0.5 text-xs text-text-2 hover:border-accent hover:text-accent";
 
+type Dock = "script" | "ai";
+
 export default function App() {
-  const [editorOpen, setEditorOpen] = useState(true);
+  const [dockOpen, setDockOpen] = useState(true);
+  const [dock, setDock] = useState<Dock>("script");
 
   // 前端状态（工程/图表/脚本）在 HMR 或页面重载后会丢，向后端对账一次；
   // 正常启动时后端也没有工程，这些调用都是空操作。
@@ -26,12 +30,18 @@ export default function App() {
     void useChartsStore.getState().hydrate();
   }, []);
 
-  // Ctrl+E 收起/展开编辑器
+  // Ctrl+E 收起/展开右侧面板，Ctrl+I 直接切到 AI 助手
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "e") {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      const k = e.key.toLowerCase();
+      if (k === "e") {
         e.preventDefault();
-        setEditorOpen((v) => !v);
+        setDockOpen((v) => !v);
+      } else if (k === "i") {
+        e.preventDefault();
+        setDockOpen(true);
+        setDock("ai");
       }
     };
     window.addEventListener("keydown", onKey);
@@ -45,8 +55,28 @@ export default function App() {
         <span className="font-semibold tracking-wide text-accent">SerialLens</span>
         <span className="text-text-2">智能串口协议调试工具</span>
         <div className="ml-auto flex items-center gap-3">
-          <button className={EDITOR_BTN} onClick={() => setEditorOpen((v) => !v)} title="Ctrl+E">
-            {editorOpen ? "收起脚本" : "脚本编辑器"}
+          <button
+            className={BTN}
+            onClick={() => {
+              setDockOpen(true);
+              setDock("script");
+            }}
+            title="Ctrl+E"
+          >
+            脚本
+          </button>
+          <button
+            className={BTN}
+            onClick={() => {
+              setDockOpen(true);
+              setDock("ai");
+            }}
+            title="Ctrl+I"
+          >
+            AI 助手
+          </button>
+          <button className={BTN} onClick={() => setDockOpen((v) => !v)} title="Ctrl+E">
+            {dockOpen ? "收起面板" : "展开面板"}
           </button>
         </div>
       </header>
@@ -58,9 +88,9 @@ export default function App() {
           <ConnectionPanel />
         </aside>
 
-        {/* 主区：左「图表 + 终端」上下分屏，右「脚本编辑器」 */}
+        {/* 主区：左「图表 + 终端」上下分屏，右「脚本 / AI」页签 */}
         <main className="min-w-0 flex-1">
-          <MainSplit editorOpen={editorOpen} />
+          <MainSplit open={dockOpen} dock={dock} onSelectDock={setDock} />
         </main>
       </div>
 
@@ -72,8 +102,16 @@ export default function App() {
   );
 }
 
-// MainSplit 左右分屏：左侧图表/终端，右侧脚本编辑器（宽度可拖拽，Ctrl+E 收起）。
-function MainSplit({ editorOpen }: { editorOpen: boolean }) {
+// MainSplit 左右分屏：左侧图表/终端，右侧「脚本 / AI」页签（宽度可拖拽，Ctrl+E 收起）。
+function MainSplit({
+  open,
+  dock,
+  onSelectDock,
+}: {
+  open: boolean;
+  dock: Dock;
+  onSelectDock: (d: Dock) => void;
+}) {
   const [editorWidth, setEditorWidth] = useState(() => Math.round(window.innerWidth * 0.36));
   const dragging = useRef(false);
 
@@ -101,7 +139,7 @@ function MainSplit({ editorOpen }: { editorOpen: boolean }) {
       <div className="min-w-0 flex-1">
         <SplitStack />
       </div>
-      {editorOpen && (
+      {open && (
         <>
           <div
             className="w-1 shrink-0 cursor-col-resize bg-border transition-colors hover:bg-accent"
@@ -111,16 +149,41 @@ function MainSplit({ editorOpen }: { editorOpen: boolean }) {
               document.body.style.cursor = "col-resize";
               document.body.style.userSelect = "none";
             }}
-            title="拖动调整编辑器宽度"
+            title="拖动调整面板宽度"
           />
-          <div style={{ width: editorWidth }} className="min-w-0 shrink-0 border-l border-border">
-            <Suspense fallback={<div className="flex h-full items-center justify-center text-xs text-text-2">加载编辑器…</div>}>
-              <EditorPanel />
-            </Suspense>
+          <div style={{ width: editorWidth }} className="flex min-w-0 shrink-0 flex-col border-l border-border">
+            <div className="flex h-7 shrink-0 items-center gap-1 border-b border-border bg-bg-1 px-1">
+              <DockTab active={dock === "script"} onClick={() => onSelectDock("script")}>
+                脚本
+              </DockTab>
+              <DockTab active={dock === "ai"} onClick={() => onSelectDock("ai")}>
+                AI 助手
+              </DockTab>
+            </div>
+            <div className="min-h-0 flex-1">
+              <Suspense
+                fallback={<div className="flex h-full items-center justify-center text-xs text-text-2">加载中…</div>}
+              >
+                {dock === "script" ? <EditorPanel /> : <AIPanel />}
+              </Suspense>
+            </div>
           </div>
         </>
       )}
     </div>
+  );
+}
+
+function DockTab({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+  return (
+    <button
+      onClick={onClick}
+      className={`rounded-panel px-2 py-0.5 text-xs ${
+        active ? "bg-bg-2 text-accent" : "text-text-2 hover:text-accent"
+      }`}
+    >
+      {children}
+    </button>
   );
 }
 

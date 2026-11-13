@@ -29,6 +29,7 @@ type Services struct {
 	Parser  *ParserAPI
 	Charts  *ChartsAPI
 	Editor  *EditorAPI
+	AI      *AIAPI
 
 	runtime *lua.Runtime
 	pipe    *parser.Service
@@ -66,6 +67,7 @@ func NewServices() *Services {
 	s.Parser = &ParserAPI{s: s}
 	s.Charts = &ChartsAPI{s: s}
 	s.Editor = &EditorAPI{s: s}
+	s.AI = NewAIService(s, "")
 	s.Project.svc.SetHooks(&switchHooks{s: s})
 	return s
 }

@@ -35,4 +35,11 @@ const (
 	// 图表（M3）
 	EvChartsUpdated = "charts:updated" // payload: {config(map), source:"project"|"external"|"ui"}
 	EvChartsError   = "charts:error"   // payload: {message} 外部编辑非法时不落盘、保留旧配置
+
+	// AI 助手（M5）
+	EvAIStatus = "ai:status" // payload: {running, ready, provider, model, has_key, messages}
+	EvAIStart  = "ai:start"  // payload: {id, provider, model}
+	EvAIDelta  = "ai:delta"  // payload: {id, text, reasoning}（~60ms 合批）
+	EvAIDone   = "ai:done"   // payload: {id, content, reasoning, usage, elapsed_ms, first_ms, finish_reason, canceled}
+	EvAIError  = "ai:error"  // payload: {id, message}
 )
