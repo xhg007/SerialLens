@@ -19,6 +19,8 @@ export interface ProjectState {
   closeProject: () => Promise<void>;
   refreshRecents: () => Promise<void>;
   removeRecent: (path: string) => Promise<void>;
+  /** 与后端对账当前工程（页面重载 / HMR 后恢复，事件补不回来时兜底） */
+  syncCurrent: () => Promise<void>;
 }
 
 // HMR 安全：模块重新求值时先取消旧订阅，避免 dev 下事件双触发。
@@ -74,6 +76,7 @@ export const useProjectStore = create<ProjectState>((set, get) => {
       // 事件之外再兜底刷新一次，避免事件丢失导致 UI 不同步
       await get().refreshRecents();
     },
+    syncCurrent: refreshCurrent,
   };
 });
 

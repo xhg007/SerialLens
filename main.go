@@ -23,6 +23,7 @@ func main() {
 			application.NewService(services.Project),
 			application.NewService(services.Serial),
 			application.NewService(services.Parser),
+			application.NewService(services.Charts),
 		},
 		Assets: application.AssetOptions{
 			Handler: application.AssetFileServerFS(assets),

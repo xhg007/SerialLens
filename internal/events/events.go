@@ -27,4 +27,8 @@ const (
 	EvScriptReloaded = "script:reloaded" // payload: {name}
 	EvScriptError    = "script:error"    // payload: {script, error, line}（1Hz 节流）
 	EvScriptLog      = "script:log"      // payload: {level, msg, ts}
+
+	// 图表（M3）
+	EvChartsUpdated = "charts:updated" // payload: {config(map), source:"project"|"external"|"ui"}
+	EvChartsError   = "charts:error"   // payload: {message} 外部编辑非法时不落盘、保留旧配置
 )

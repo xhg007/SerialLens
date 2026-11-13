@@ -10,6 +10,7 @@ import (
 
 	"github.com/wailsapp/wails/v3/pkg/application"
 
+	"seriallens/internal/charts"
 	"seriallens/internal/events"
 	"seriallens/internal/lua"
 	"seriallens/internal/parser"
@@ -25,9 +26,11 @@ type Services struct {
 	Project *ProjectService
 	Serial  *SerialService
 	Parser  *ParserAPI
+	Charts  *ChartsAPI
 
 	runtime *lua.Runtime
 	pipe    *parser.Service
+	charts  *charts.Service
 
 	mu   sync.RWMutex
 	emit events.Emitter
@@ -50,8 +53,10 @@ func NewServices() *Services {
 	})
 	s.pipe = parser.New(parser.Options{Runtime: s.runtime, Emit: s.emitEvent})
 	s.Serial.SetRawTap(s.pipe.Ingest)
+	s.charts = charts.NewService(s.emitEvent)
 	s.Project = newProjectService(s)
 	s.Parser = &ParserAPI{s: s}
+	s.Charts = &ChartsAPI{s: s}
 	s.Project.svc.SetHooks(&switchHooks{s: s})
 	return s
 }
@@ -70,6 +75,7 @@ func (s *Services) install(app *application.App) {
 		s.mu.Unlock()
 		s.Project.svc.SetEmitter(em)
 		s.Serial.SetEmitter(em)
+		s.charts.SetEmitter(em)
 		s.pipe.Start()
 	})
 }
@@ -85,6 +91,7 @@ func (s *Services) emitEvent(event string, payload map[string]any) {
 
 // Shutdown 释放运行时资源（应用退出）。
 func (s *Services) Shutdown() {
+	s.charts.Close()
 	s.pipe.Stop()
 	s.runtime.Close()
 }
@@ -92,25 +99,27 @@ func (s *Services) Shutdown() {
 // switchHooks 实现 project.SwitchHooks：工程切换时的外部资源拆卸/装载。
 type switchHooks struct{ s *Services }
 
-// BeforeSwitch 顺序按 PRD §3.8：先断串口，再清 Lua 字节码。
+// BeforeSwitch 顺序按 PRD §3.8：先断串口，再清 Lua 字节码，最后停图表监听。
 func (h *switchHooks) BeforeSwitch() error {
 	if err := h.s.Serial.Disconnect(); err != nil {
 		return fmt.Errorf("disconnect serial: %w", err)
 	}
 	h.s.pipe.Clear()
+	h.s.charts.Close()
 	return nil
 }
 
-// AfterOpen 加载新工程的 active_script；脚本失败不关闭工程。
+// AfterOpen 加载新工程的 active_script 与 charts.json；任一失败都不关闭工程。
 func (h *switchHooks) AfterOpen(dir string, meta *project.ProjectMeta) {
-	if meta == nil || meta.ActiveScript == "" {
-		return
+	if meta != nil && meta.ActiveScript != "" {
+		if err := h.s.pipe.LoadScript(dir, meta.ActiveScript); err != nil {
+			h.s.emitEvent(events.EvScriptError, map[string]any{
+				"script": meta.ActiveScript, "error": err.Error(), "line": 0,
+			})
+		}
 	}
-	if err := h.s.pipe.LoadScript(dir, meta.ActiveScript); err != nil {
-		h.s.emitEvent(events.EvScriptError, map[string]any{
-			"script": meta.ActiveScript, "error": err.Error(), "line": 0,
-		})
-	}
+	// 图表配置独立加载：脚本坏了图表仍可展示；charts:error 由 charts.Service 自行上报。
+	_ = h.s.charts.Load(dir)
 }
 
 // ParserAPI Wails 薄壳：解析统计、手动重载、单帧试跑、命令编码下发。

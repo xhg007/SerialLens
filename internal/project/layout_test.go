@@ -1,11 +1,12 @@
 package project
 
 import (
-	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"seriallens/internal/charts"
 )
 
 func TestScaffoldCreatesLayout(t *testing.T) {
@@ -68,15 +69,16 @@ func TestScaffoldTemplateContents(t *testing.T) {
 	if !strings.Contains(string(lua), "on_frame") {
 		t.Error("main.lua must contain on_frame contract")
 	}
-	chartsRaw, err := os.ReadFile(filepath.Join(dir, "charts.json"))
-	if err != nil {
-		t.Fatal(err)
+	// 模板里的 charts.json 必须能通过 charts 包的 schema 校验，且开箱就有可用 widget
+	// （否则新工程打开后图表区一片空白，用户以为功能坏了）。
+	cfg, existed, err := charts.Load(dir)
+	if err != nil || !existed {
+		t.Fatalf("template charts.json invalid: %v (existed=%v)", err, existed)
 	}
-	var charts map[string]any
-	if err := json.Unmarshal(chartsRaw, &charts); err != nil {
-		t.Errorf("charts.json invalid: %v", err)
+	if len(cfg.Widgets) == 0 {
+		t.Fatal("blank template must ship usable widgets")
 	}
-	if charts["version"] != "1.0" {
-		t.Errorf("charts.json version = %v", charts["version"])
+	if cfg.Widgets[0].Type != charts.TypeLine {
+		t.Fatalf("first widget type = %s, want line", cfg.Widgets[0].Type)
 	}
 }

@@ -1,5 +1,29 @@
 {
   "version": "1.0",
   "layout": { "grid": { "cols": 12, "row_height": 80 } },
-  "widgets": []
+  "widgets": [
+    {
+      "id": "w_main",
+      "type": "line",
+      "title": "实时波形",
+      "position": { "x": 0, "y": 0, "w": 8, "h": 4 },
+      "channels": "auto",
+      "window_seconds": 60,
+      "y_axis_mode": "auto"
+    },
+    {
+      "id": "w_gauge",
+      "type": "gauge",
+      "title": "最新值",
+      "position": { "x": 8, "y": 0, "w": 4, "h": 4 },
+      "channels": "auto"
+    },
+    {
+      "id": "w_fields",
+      "type": "field_table",
+      "title": "原始字段",
+      "position": { "x": 0, "y": 4, "w": 12, "h": 3 },
+      "channels": "auto"
+    }
+  ]
 }
