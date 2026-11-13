@@ -1,11 +1,14 @@
 package app
 
 import (
+	"context"
 	"encoding/hex"
 	"fmt"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/wailsapp/wails/v3/pkg/application"
 
 	"seriallens/internal/events"
 	"seriallens/internal/serial"
@@ -33,6 +36,20 @@ func NewSerialService(port serial.Port, emit events.Emitter) *SerialService {
 		emit = func(string, map[string]any) {}
 	}
 	return &SerialService{port: port, emit: emit, stop: make(chan struct{})}
+}
+
+// NewSerialServiceWithDefault 使用 go.bug.st 系统串口实现（Wails 注册用）。
+func NewSerialServiceWithDefault() *SerialService {
+	return NewSerialService(serial.NewPort(), nil)
+}
+
+// ServiceStartup 在应用启动时注入事件桥接。
+func (s *SerialService) ServiceStartup(ctx context.Context, options application.ServiceOptions) error {
+	app := application.Get()
+	s.SetEmitter(func(event string, payload map[string]any) {
+		app.Event.Emit(event, payload)
+	})
+	return nil
 }
 
 // SetEmitter 在 Wails ServiceStartup 阶段注入事件桥接。

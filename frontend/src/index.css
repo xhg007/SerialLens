@@ -1,0 +1,49 @@
+@import "tailwindcss";
+
+/*
+ * SerialLens 设计 token（计划头部「UI 设计决策」，2026-11-13 定稿）
+ * 极简 flat：6px 圆角、1px 描边、无阴影。
+ * 深色单主题；Tailwind @theme 注册为颜色类（bg-bg-1 / text-accent / border-border 等）。
+ */
+@theme {
+  --color-bg-0: #0f131a;
+  --color-bg-1: #151b24;
+  --color-bg-2: #1c2430;
+  --color-border: #26303e;
+  --color-text-1: #e6edf3;
+  --color-text-2: #8b98a9;
+  --color-accent: #2dd4bf;
+  --color-rx: #34d399;
+  --color-tx: #fb923c;
+  --color-danger: #f87171;
+  --color-warn: #fbbf24;
+
+  /* 图表通道 10 色板（M3 charts.json 默认取色） */
+  --color-ch-1: #2dd4bf;
+  --color-ch-2: #38bdf8;
+  --color-ch-3: #a78bfa;
+  --color-ch-4: #f472b6;
+  --color-ch-5: #fbbf24;
+  --color-ch-6: #34d399;
+  --color-ch-7: #fb7185;
+  --color-ch-8: #22d3ee;
+  --color-ch-9: #f97316;
+  --color-ch-10: #e879f9;
+
+  --font-mono: "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+  --radius-panel: 6px;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+  background: var(--color-bg-0);
+  color: var(--color-text-1);
+  overflow: hidden;
+}
+
+* {
+  box-sizing: border-box;
+}

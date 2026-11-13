@@ -18,6 +18,7 @@ func main() {
 		Description: "智能串口协议调试工具",
 		Services: []application.Service{
 			application.NewService(app.NewProjectService()),
+			application.NewService(app.NewSerialServiceWithDefault()),
 		},
 		Assets: application.AssetOptions{
 			Handler: application.AssetFileServerFS(assets),
