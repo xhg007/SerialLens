@@ -7,6 +7,7 @@ import { applyChartPoints } from "./stores/charts";
 import { useProjectStore } from "./stores/project";
 import { useEditorStore } from "./stores/editor";
 import { useParserStore } from "./stores/parser";
+import { useAIStore } from "./stores/ai";
 import * as ChartsAPI from "../bindings/seriallens/internal/app/chartsapi";
 import * as ParserAPI from "../bindings/seriallens/internal/app/parserapi";
 
@@ -89,6 +90,11 @@ declare global {
     __slDevEditorSave?: () => Promise<Record<string, unknown> | null>;
     __slDevWaitField?: (name: string, timeoutMs?: number) => Promise<number>;
     __slDevLastFields?: () => string[];
+    __slDevAISave?: (patch: Record<string, unknown>) => Promise<Record<string, unknown> | null>;
+    __slDevAITest?: (patch: Record<string, unknown>) => Promise<string>;
+    __slDevAISend?: (text: string) => Promise<void>;
+    __slDevAICancel?: () => Promise<void>;
+    __slDevAIState?: () => Record<string, unknown>;
   }
 }
 
@@ -162,6 +168,38 @@ window.__slDevWaitField = async (name, timeoutMs = 2000) => {
     await new Promise((r) => requestAnimationFrame(r));
   }
   return -1;
+};
+
+// M5 验收：AI 设置/连接测试/发送/取消都走真实 store → Wails 绑定链路。
+window.__slDevAISave = async (patch) => {
+  await useAIStore.getState().saveSettings(patch as any);
+  return (useAIStore.getState().settings as unknown as Record<string, unknown>) ?? null;
+};
+window.__slDevAITest = async (patch) => {
+  await useAIStore.getState().testConnection(patch as any);
+  return useAIStore.getState().testResult;
+};
+window.__slDevAISend = async (text) => {
+  await useAIStore.getState().send(text);
+};
+window.__slDevAICancel = async () => {
+  await useAIStore.getState().cancel();
+};
+window.__slDevAIState = () => {
+  const s = useAIStore.getState();
+  return {
+    busy: s.busy,
+    error: s.error,
+    messages: s.messages.map((m) => ({
+      role: m.role,
+      len: m.content.length,
+      streaming: !!m.streaming,
+      canceled: !!m.canceled,
+      usage: m.usage,
+      elapsedMs: m.elapsedMs,
+      head: m.content.slice(0, 40),
+    })),
+  };
 };
 
 requestAnimationFrame(tick);

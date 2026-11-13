@@ -457,6 +457,14 @@ for attempt in 1..MAX_ATTEMPTS(默认 3):
 | `agent.timeout_per_tool` | 5s | 工具调用超时 |
 | `agent.max_samples_per_request` | 10 | 样本上限 |
 | `agent.local_mode` | false | 仅本地模式 |
+
+> **实现状态（2026-11-13，M5 阶段一：LLM 接入）**：
+> - 供应商预设：DeepSeek / 通义千问（DashScope 兼容模式）/ Kimi（Moonshot）/ OpenAI / Ollama（本地）/ 自定义端点，选预设自动带出 base_url 与推荐模型；模型名始终可手填（不设白名单）。
+> - 设置持久化 `~/.seriallens/ai.json`：Key 用主机+用户名派生密钥 XOR+base64 **本机混淆**（不是加密，见 §10.8），环境变量 `SERIALENS_AI_*` 可整体覆盖（CI / 免落盘试用）。文件权限 0600，原子替换。
+> - OpenAI 兼容客户端（`internal/llm`）：非流式 + SSE 流式 + tool_calls 分片聚合 + usage 统计；`stream_options` 不被识别时自动去掉重试（vLLM/LM Studio 老版本）；错误码映射为中文提示（401/402/404/429/5xx）。
+> - 连通性测试优先 `GET /models`（**零 token**），不支持再退化成一次 `max_tokens=8` 的短对话。
+> - 多轮对话：system prompt 每次现拼（身份边界 + Lua API 清单 + 当前脚本 + 工程偏好），历史保留最近 24 条；流式增量 60ms 合批推送，`ai:done` 内容为权威全文；生成中拒绝并发请求，停止 = ctx cancel（已输出内容保留）。
+> - 验收方式：`go run ./cmd/mockllm` 起本地 OpenAI 兼容假服务，无 Key 也能跑通全链路（见 `docs/acceptance/m5-llm.md`）。
 ---
 # 5. 非功能需求
 | 维度 | 指标 |
@@ -662,7 +670,7 @@ const (
 | **M2 Lua 引擎** | 第 2~3 周 | LuaRuntime + 池 + 沙箱 + 全量内置 API + frame:parsed | Modbus 示例脚本解析正确；`-race` 下 100 goroutine 并发压测通过；1Mbps 持续 10 分钟 0 崩溃（**实测见 `docs/acceptance/m2-lua-runtime.md`**） |
 | **M3 图表** | 第 4 周 | ChartsService + charts.json 加载 + uPlot/ECharts 渲染 | 10 通道 × 100Hz 流畅；外部编辑 charts.json 实时同步（**实测见 `docs/acceptance/m3-charts.md`**） |
 | **M4 编辑器+热重载** | 第 5 周 | Monaco + fsnotify + 保存即生效 + 错误行号回显 | 修改脚本 < 100ms 生效（**实测见 `docs/acceptance/m4-editor.md`**） |
-| **M5 AI Agent** | 第 6~7 周 | 双任务状态机 + JSONL 会话 + 12 工具 + Diff 确认 + charts 联动 | 首试通过率 ≥ 50%，3 轮自修复 ≥ 85%；安全用例 100%；eval 集成 CI |
+| **M5 AI Agent** | 第 6~7 周 | 双任务状态机 + JSONL 会话 + 12 工具 + Diff 确认 + charts 联动 | 首试通过率 ≥ 50%，3 轮自修复 ≥ 85%；安全用例 100%；eval 集成 CI（**阶段一「LLM 接入 + 多轮对话」已完成，见 `docs/acceptance/m5-llm.md`**） |
 | **M6 收尾** | 第 8 周 | 录制回放、命令面板、3 工程模板、zip 导入导出、打包 | 三平台安装包 < 30MB；冷启动 < 2s；工程跨机迁移打开即用 |
 ---
 # 9. 风险清单
@@ -777,6 +785,19 @@ end
 | 试运行隔离 | 一次性 `lua.Runtime`，`send_bytes` sink 替换为报错 | 沙箱试跑绝不能触达硬件；在线脚本/字节码完全不受影响 |
 | 活动脚本改名 | 同步改写 `project.json` 并按新名装载 | 否则重开工程后 active_script 指向已不存在的旧名字 |
 | 事件契约 | 新增 `script:changed`/`script:list`；`script:reloaded` 增加 `source`/`compile_ms`/`load_ms` | 前端需要区分「自己写的」与「外部改的」，耗时字段是验收证据 |
+## 10.8 实现裁决记录（M5 阶段一，2026-11-13）
+| 议题 | 裁决 | 原因 |
+|---|---|---|
+| LLM SDK | **不引第三方 SDK**，手写 OpenAI 兼容客户端（HTTP + SSE，~350 行） | DeepSeek/Qwen/Moonshot/Ollama 的差异集中在 base_url 与少量私有字段（reasoning_content、stream_options），SDK 反而会收紧对私有字段的处理；还省了依赖体积 |
+| 连通性测试 | 先 `GET /models`（零 token），401/403 直接报 Key 错，否则退化成 `max_tokens=8` 短对话 | 测试按钮不该烧用户的钱；/models 缺失时（部分自建代理）才有必要花 token |
+| Key 存储 | 主机+用户名派生密钥 XOR+base64 本机混淆 + `SERIALENS_AI_API_KEY` 环境变量覆盖；**不是加密** | DPAPI/Keychain 需要平台专用 API（Windows 无纯 Go DPAPI 绑定）；混淆能挡「配置文件被拷走/误传仓库」，挡不住本机同权限程序——已在验收文档明示，接口只有 obfuscate/deobfuscate 两个函数，后续可无痛替换 |
+| 流式推送 | 增量 60ms 合批 + 结束时补最后一段；`ai:done` 全文为权威覆盖写入 | token 级事件直推 WebView 是事件风暴；「回答太快一帧都没推」时 done 前补一段保证 UI 有渐进感 |
+| 并发语义 | 单会话同时只允许一个请求；停止 = ctx cancel，已输出内容保留进历史 | 两条流交替写同一会话会互相覆盖；取消后保留部分回答符合直觉（用户往往是想省 token 而不是否掉内容） |
+| 上下文注入 | system prompt **每次现拼**（身份边界 + Lua API 清单 + 当前脚本 + `system_extra`），历史只存 user/assistant 且截最近 24 条 | 脚本内容随时在变，缓存的 system prompt 会误导模型；API 清单与 Monaco 补全同源（`lua.APIManifest()`），不会出现「提示了但不存在」 |
+| `temperature: 0` | 入参用 `*float64` | 0 是合法值（确定性输出），用「零值即未设置」会把它静默改成 0.3 |
+| stream_options 兼容 | 流式请求 400 且 body 含 `stream_options` 时自动去掉重试一次 | vLLM / LM Studio 老版本不认识该字段；usage 只是锦上添花，不能因此断流 |
+| UI 归属 | 右侧 dock 改为「脚本 / AI 助手」双页签（Ctrl+I 直达），AI 面板命名「AI 脚本助手」 | PRD §4.2 明确不是聊天机器人：命名与占位文案引导任务化提问，边界写进 system prompt |
+| 无 Key 验收 | `cmd/mockllm`（仅 dev）：本地 OpenAI 兼容假服务，SSE + 可控延迟 + 取消感知 | 不能等用户买 Key 才验收；eval 回归（阶段二）同样依赖它 |
 ---
 ## 落地要点总结
 1. **先建 eval，再写 Agent**：`internal/agent/eval/` 样本集在 M5 开始前就要有骨架，prompt 调优不能盲改；
