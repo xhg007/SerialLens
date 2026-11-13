@@ -260,6 +260,9 @@ Record (循环):    ts_delta_ms(uint32) | direction(uint8) | length(uint16) | pa
 5. 更新 `recent_projects.json`
 6. 加载新工程：project.json → 注册脚本 → charts.json → 对话摘要 → emit `project:opened`
 **任意一步失败**：回滚至 NoProject，弹错误提示，禁止半加载状态。
+
+> **实现状态（2026-11-13，M0/M1）**：当前仅实现 `NoProject` / `ProjectOpen` 两态，`ProjectSwitching` 待 M2 引入串口断开与 Lua 字节码清理后补齐。
+> 切换失败的实际语义为「**保留原工程** + `emit project:error`」，与上句「回滚至 NoProject」不同：M0 阶段尚无 Runtime/charts/AI 会话需要清理，丢弃用户当前工程反而更危险；待 M2 有真实清理步骤后再按上图回滚。
 ## 3.9 工程模板
 | 模板 | 预置内容 |
 |---|---|
@@ -601,7 +604,8 @@ type ScriptEngine interface {
     CallDetectFrame(name string, buf []byte) (int, error)
     SetEmitter(fn func(event string, payload map[string]any))
 }
-// internal/app/events.go —— 前后端事件契约
+// internal/events/events.go —— 前后端事件契约
+// （独立叶包：project → app 会构成循环依赖，故常量下沉到 internal/events）
 const (
     // 工程
     EvProjectOpened   = "project:opened"   // {path,name,serial_config,active_script}
@@ -609,7 +613,7 @@ const (
     EvProjectError    = "project:error"    // {code,message}
     EvRecentUpdated   = "recent:updated"   // {projects:[...]}
     // 串口与数据
-    EvSerialStatus    = "serial:status"    // {state,bytesIn,bytesOut}
+    EvSerialStatus    = "serial:status"    // {state,bytes_in,bytes_out}（1Hz 节流推送）
     EvSerialData      = "serial:data"      // 终端原始数据(批量合帧)
     EvFrameParsed     = "frame:parsed"     // 完整字段表
     EvChartPoint      = "chart:point"      // 批量: [{ch,v,ts}...]
@@ -625,6 +629,7 @@ const (
 )
 ```
 **约定**：跨前后端数据仅允许 `map[string]any` 与基础类型（Wails 序列化限制）；事件 payload 结构在 `events.go` 注释明确。
+**命名约定（实现定稿）**：payload 一律 snake_case（与 Go 结构体 JSON tag 一致），`ts` 为 Unix 毫秒；前端不做大小写兜底。
 ## 7.5 服务间关键约定
 - **路径单一来源**：所有需要工程路径的 Service 必须通过 `ProjectService.Current()` 获取，禁止各自持有副本
 - **JSON 落盘必校验**：project.json / charts.json / AI 输出，Schema 校验失败不写盘
@@ -634,8 +639,8 @@ const (
 # 8. 里程碑与验收标准
 | 阶段 | 周期 | 交付物 | 验收标准 |
 |---|---|---|---|
-| **M0 工程域** | 第 0.5 周 | ProjectService + 目录骨架 + project.json + 最近列表 | 打开/切换/关闭状态机正确；切换后 Runtime 残留字节码 = 0 |
-| **M1 骨架** | 第 1 周 | Wails3 工程 + SerialService + 终端回显 + 工程切换器 UI | 115200 稳定收发 0 丢包；UI 不冻结 |
+| **M0 工程域** | 第 0.5 周 | ProjectService + 目录骨架 + project.json + 最近列表 | 打开/切换/关闭状态机正确；切换后 Runtime 残留字节码 = 0（**M0 阶段 N/A：无 Lua Runtime，M2 生效**） |
+| **M1 骨架** | 第 1 周 | Wails3 工程 + SerialService + 终端回显 + 工程切换器 UI | 115200 稳定收发 0 丢包；UI 不冻结（**实测见 `docs/acceptance/m0-m1.md`**） |
 | **M2 Lua 引擎** | 第 2~3 周 | LuaRuntime + 池 + 沙箱 + 全量内置 API + frame:parsed | Modbus 示例脚本解析正确；`-race` 下 100 goroutine 并发压测通过；1Mbps 持续 10 分钟 0 崩溃 |
 | **M3 图表** | 第 4 周 | ChartsService + charts.json 加载 + uPlot/ECharts 渲染 | 10 通道 × 100Hz 流畅；外部编辑 charts.json 实时同步 |
 | **M4 编辑器+热重载** | 第 5 周 | Monaco + fsnotify + 保存即生效 + 错误行号回显 | 修改脚本 < 100ms 生效 |
@@ -666,7 +671,8 @@ github.com/yuin/gopher-lua          脚本引擎
 github.com/yuin/gluamapper          Lua→Go struct
 github.com/goplus/gopher-luar       Go↔Lua 类型反射
 github.com/fsnotify/fsnotify        热重载
-github.com/bugst/go-serial/v2       串口
+go.bug.st/serial v1.8.0             串口（无 v2；v1 无硬件/软件流控 API，
+                                    flow_control 非 none 时 Open 显式报错）
 gopkg.in/santhosh-tekuri/jsonschema  Schema 校验
 # Frontend
 zustand                             状态管理
@@ -699,6 +705,18 @@ function on_frame(raw)
     return { temperature = temp }
 end
 ```
+## 10.4 实现裁决记录（M0/M1，2026-11-13）
+| 议题 | 裁决 | 原因 |
+|---|---|---|
+| 事件常量位置 | 下沉到 `internal/events` 叶包 | `internal/project` 需要用常量，import `internal/app` 会形成循环依赖 |
+| 串口依赖 | `go.bug.st/serial v1.8.0`（PRD 原写 `github.com/bugst/go-serial/v2`，两处均有误） | 该库无 v2；v1 无流控 API，`flow_control` 配置保留、Open 时非 none 显式报错 |
+| payload 命名 | 全 snake_case（`bytes_in`/`bytes_out`/`serial_config`/`active_script`） | 与 Go 结构体 JSON tag 一致，前端不做大小写兜底 |
+| 状态机 | 两态（NoProject / ProjectOpen），ProjectSwitching 待 M2 | M0 无 Runtime/图表会话可清理 |
+| 切换失败 | 保留原工程 + `emit project:error` | 与 §3.8「回滚 NoProject」不同，理由见 §3.8 实现状态注记 |
+| emit 时机 | 状态替换后**锁外** emit | 监听者回调内读 `State()/Current()` 会自死锁（M2 串口断开逻辑必然踩到） |
+| 读循环结构 | 独立读 goroutine + select 驱动 33ms flush | 阻塞 `Read` 与定时器同循环会让尾部数据滞留（实测 15s+） |
+| 连接生命周期 | 每次连接独立 `stop`/`done` channel，Disconnect 等待读循环退出 | `sync.Once` 跨连接复用会让第二次 Disconnect 失效并泄漏 goroutine |
+| `-race` | M1 未执行（本机无 gcc） | M2 安装 MSYS2 后补跑 |
 ---
 ## 落地要点总结
 1. **先建 eval，再写 Agent**：`internal/agent/eval/` 样本集在 M5 开始前就要有骨架，prompt 调优不能盲改；
