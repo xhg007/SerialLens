@@ -5,6 +5,8 @@ import (
 	"log"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
+
+	"seriallens/internal/app"
 )
 
 //go:embed all:frontend/dist
@@ -14,7 +16,9 @@ func main() {
 	app := application.New(application.Options{
 		Name:        "SerialLens",
 		Description: "智能串口协议调试工具",
-		Services:    []application.Service{},
+		Services: []application.Service{
+			application.NewService(app.NewProjectService()),
+		},
 		Assets: application.AssetOptions{
 			Handler: application.AssetFileServerFS(assets),
 		},

@@ -33,6 +33,15 @@ func NewService(recents *RecentStore, emit events.Emitter) *Service {
 	return &Service{recents: recents, emit: emit}
 }
 
+// SetEmitter 在 Wails ServiceStartup 阶段注入事件桥接。
+func (s *Service) SetEmitter(fn events.Emitter) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if fn != nil {
+		s.emit = fn
+	}
+}
+
 // State 返回当前状态。
 func (s *Service) State() State {
 	s.mu.Lock()
