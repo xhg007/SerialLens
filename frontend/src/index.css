@@ -47,3 +47,21 @@ body,
 * {
   box-sizing: border-box;
 }
+
+/* 终端行：屏外行跳过布局与绘制（5000 行历史仍是完整 DOM，但只有可视区参与渲染） */
+.term-row {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 20px;
+}
+
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: var(--color-border);
+  border-radius: 5px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}

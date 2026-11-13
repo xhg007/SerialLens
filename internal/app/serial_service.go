@@ -250,6 +250,10 @@ func (s *SerialService) emitStatus() {
 
 // readLoop 读串口 → 33ms 合帧批量推送；读错误即断开（不 panic、不泄漏）。
 // done 在退出时关闭，供 Disconnect 等待。
+//
+// 结构：独立的读 goroutine 只负责把字节搬进 dataCh，本循环用 select 同时等待
+// 「新数据 / 合帧定时器 / 停止信号」。若把阻塞 Read 放在本循环里，设备发完最后
+// 一帧就安静时，pending 会一直滞留到下一次数据到达（实测可达 15s 以上）。
 func (s *SerialService) readLoop(stop, done chan struct{}) {
 	defer close(done)
 	defer func() {
@@ -257,10 +261,45 @@ func (s *SerialService) readLoop(stop, done chan struct{}) {
 		s.reading = false
 		s.mu.Unlock()
 	}()
-	buf := make([]byte, 4096)
+
+	dataCh := make(chan []byte, 32)
+	errCh := make(chan error, 1)
+
+	go func() {
+		buf := make([]byte, 4096)
+		for {
+			// 每次 Read 前先看停止信号：某些实现读不到数据时不返回错误
+			// （或返回 0,nil），只靠读错误退出会泄漏这个 goroutine。
+			select {
+			case <-stop:
+				return
+			default:
+			}
+			n, err := s.port.Read(buf)
+			if err != nil {
+				select {
+				case errCh <- err:
+				default:
+				}
+				return
+			}
+			if n == 0 {
+				continue
+			}
+			chunk := make([]byte, n)
+			copy(chunk, buf[:n])
+			select {
+			case dataCh <- chunk:
+			case <-stop:
+				return
+			}
+		}
+	}()
+
 	var pending []byte
 	ticker := time.NewTicker(time.Duration(batchIntervalMs) * time.Millisecond)
 	defer ticker.Stop()
+	lastStatus := time.Now()
 
 	flush := func() {
 		if len(pending) == 0 {
@@ -280,29 +319,25 @@ func (s *SerialService) readLoop(stop, done chan struct{}) {
 		case <-stop:
 			flush()
 			return
-		default:
-			if len(pending) > 0 {
-				select {
-				case <-ticker.C:
-					flush()
-				default:
-				}
-			}
-			n, err := s.port.Read(buf)
-			if err != nil {
-				flush()
-				s.mu.Lock()
-				s.connected = false
-				s.mu.Unlock()
-				_ = s.port.Close()
+		case <-errCh:
+			flush()
+			s.mu.Lock()
+			s.connected = false
+			s.mu.Unlock()
+			_ = s.port.Close()
+			s.emitStatus()
+			return
+		case chunk := <-dataCh:
+			pending = append(pending, chunk...)
+			s.mu.Lock()
+			s.bytesIn += uint64(len(chunk))
+			s.mu.Unlock()
+		case <-ticker.C:
+			flush()
+			// 流式期间按 1Hz 刷新状态事件，否则前端 RX/TX 计数只在连接/断开时更新
+			if time.Since(lastStatus) >= time.Second {
+				lastStatus = time.Now()
 				s.emitStatus()
-				return
-			}
-			if n > 0 {
-				pending = append(pending, buf[:n]...)
-				s.mu.Lock()
-				s.bytesIn += uint64(n)
-				s.mu.Unlock()
 			}
 		}
 	}

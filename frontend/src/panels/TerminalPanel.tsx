@@ -57,7 +57,7 @@ export function TerminalPanel() {
     >
       {filtered.length === 0 && <div className="text-text-2">等待数据…</div>}
       {filtered.map((l) => (
-        <div key={l.id} className="whitespace-pre">
+        <div key={l.id} className="term-row whitespace-pre">
           <span className="text-text-2">{ts(l.ts)}</span>
           <span className={`mx-2 ${l.direction === "rx" ? "text-rx" : "text-tx"}`}>
             {l.direction === "rx" ? "RX" : "TX"}
