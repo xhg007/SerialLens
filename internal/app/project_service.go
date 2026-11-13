@@ -14,22 +14,33 @@ import (
 type ProjectService struct {
 	svc     *project.Service
 	recents *project.RecentStore
+	pipe    *Services
 }
 
 func NewProjectService() *ProjectService {
+	return newProjectService(nil)
+}
+
+func newProjectService(pipe *Services) *ProjectService {
 	recents := project.NewRecentStore("")
 	return &ProjectService{
 		recents: recents,
 		svc:     project.NewService(recents, nil),
+		pipe:    pipe,
 	}
 }
 
 // ServiceStartup 在应用启动时注入事件桥接。
 func (p *ProjectService) ServiceStartup(ctx context.Context, options application.ServiceOptions) error {
-	if app := application.Get(); app != nil {
-		p.svc.SetEmitter(func(event string, payload map[string]any) {
-			app.Event.Emit(event, payload)
-		})
+	app := application.Get()
+	if app == nil {
+		return nil
+	}
+	p.svc.SetEmitter(func(event string, payload map[string]any) {
+		app.Event.Emit(event, payload)
+	})
+	if p.pipe != nil {
+		p.pipe.install(app)
 	}
 	return nil
 }

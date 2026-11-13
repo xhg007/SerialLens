@@ -18,4 +18,13 @@ const (
 	// 串口与数据
 	EvSerialStatus = "serial:status" // payload: {state:"disconnected"|"connected", bytes_in, bytes_out}
 	EvSerialData   = "serial:data"   // payload: {hex:"AABB..", ts:毫秒时间戳} 33ms 合帧批量
+
+	// 解析（M2）
+	EvFrameParsed = "frame:parsed" // payload: {hex, ts, fields(map), duration_us}
+	EvChartPoint  = "chart:point"  // payload: {points:[{ch,v,ts}]} 33ms 合批
+
+	// 脚本（M2）
+	EvScriptReloaded = "script:reloaded" // payload: {name}
+	EvScriptError    = "script:error"    // payload: {script, error, line}（1Hz 节流）
+	EvScriptLog      = "script:log"      // payload: {level, msg, ts}
 )

@@ -3,6 +3,7 @@ import { ConnectionPanel } from "./panels/ConnectionPanel";
 import { TerminalPanel } from "./panels/TerminalPanel";
 import { useConnectionStore } from "./stores/connection";
 import { useProjectStore } from "./stores/project";
+import { useParserStore } from "./stores/parser";
 
 export default function App() {
   return (
@@ -47,6 +48,28 @@ function StatusLine() {
       <span>
         RX <span className="text-rx">{bytesIn}</span> · TX <span className="text-tx">{bytesOut}</span>
       </span>
+      <ParserStatus />
+    </>
+  );
+}
+
+function ParserStatus() {
+  const { script, frames, errors, lastError } = useParserStore();
+  if (!script) return <span className="text-text-2">脚本: 未加载</span>;
+  return (
+    <>
+      <span>
+        脚本: <span className="text-accent">{script}</span>
+      </span>
+      <span>
+        解析 <span className="text-rx">{frames}</span> 帧
+        {errors > 0 && <span className="ml-1 text-danger">· {errors} 错误</span>}
+      </span>
+      {lastError && (
+        <span className="truncate text-danger" title={lastError}>
+          {lastError}
+        </span>
+      )}
     </>
   );
 }
