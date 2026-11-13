@@ -11,6 +11,7 @@ import { useAIStore } from "./stores/ai";
 import { monaco } from "./lib/monaco";
 import * as ChartsAPI from "../bindings/seriallens/internal/app/chartsapi";
 import * as EditorAPI from "../bindings/seriallens/internal/app/editorapi";
+import * as DesktopBinding from "../bindings/seriallens/internal/app/desktop";
 import * as ParserAPI from "../bindings/seriallens/internal/app/parserapi";
 
 interface DevStats {
@@ -99,6 +100,7 @@ declare global {
     __slDevEditorState?: () => Record<string, unknown>;
     __slDevSaveScript?: (name: string, content: string) => Promise<Record<string, unknown>>;
     __slDevEditEditor?: (text: string) => void;
+    __slDevDesktop?: (action?: string) => Promise<Record<string, unknown>>;
     __slDevAISave?: (patch: Record<string, unknown>) => Promise<Record<string, unknown> | null>;
     __slDevAITest?: (patch: Record<string, unknown>) => Promise<string>;
     __slDevAISend?: (text: string) => Promise<void>;
@@ -207,6 +209,30 @@ window.__slDevSaveScript = async (name: string, content: string) => {
 // 模拟用户在编辑器里敲字（制造未保存修改）
 window.__slDevEditEditor = (text: string) => {
   useEditorStore.getState().setContent(text);
+};
+// 无边框窗口/托盘验证探针
+window.__slDevDesktop = async (action?: string) => {
+  const D = DesktopBinding;
+  switch (action) {
+    case "min":
+      await D.Minimise();
+      break;
+    case "max": {
+      await D.ToggleMaximise();
+      break;
+    }
+    case "close":
+      await D.CloseToTray();
+      break;
+    case "show":
+      await D.ShowFromTray();
+      break;
+  }
+  return {
+    maximised: Boolean(await D.IsMaximised()),
+    visibility: document.visibilityState,
+    inner: [window.innerWidth, window.innerHeight],
+  };
 };
 // store 与 Monaco model 的对照：两者不一致就是「界面没刷新」的 bug
 window.__slDevEditorState = () => {

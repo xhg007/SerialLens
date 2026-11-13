@@ -1,4 +1,5 @@
 import { Suspense, lazy, useCallback, useEffect, useRef, useState } from "react";
+import { TitleBar } from "./components/TitleBar";
 import { ChartPanel } from "./panels/ChartPanel";
 import { ProjectSwitcher } from "./panels/ProjectSwitcher";
 import { ConnectionPanel } from "./panels/ConnectionPanel";
@@ -13,9 +14,6 @@ const EditorPanel = lazy(() =>
   import("./panels/EditorPanel").then((m) => ({ default: m.EditorPanel })),
 );
 const AIPanel = lazy(() => import("./panels/AIPanel").then((m) => ({ default: m.AIPanel })));
-
-const BTN =
-  "rounded-panel border border-border px-2 py-0.5 text-xs text-text-2 hover:border-accent hover:text-accent";
 
 type Dock = "script" | "ai";
 
@@ -50,36 +48,15 @@ export default function App() {
 
   return (
     <div className="flex h-screen flex-col bg-bg-0 text-text-1 font-mono">
-      {/* 顶栏 */}
-      <header className="flex h-10 shrink-0 items-center gap-3 border-b border-border bg-bg-1 px-3 text-sm">
-        <span className="font-semibold tracking-wide text-accent">SerialLens</span>
-        <span className="text-text-2">智能串口协议调试工具</span>
-        <div className="ml-auto flex items-center gap-3">
-          <button
-            className={BTN}
-            onClick={() => {
-              setDockOpen(true);
-              setDock("script");
-            }}
-            title="Ctrl+E"
-          >
-            脚本
-          </button>
-          <button
-            className={BTN}
-            onClick={() => {
-              setDockOpen(true);
-              setDock("ai");
-            }}
-            title="Ctrl+I"
-          >
-            AI 助手
-          </button>
-          <button className={BTN} onClick={() => setDockOpen((v) => !v)} title="Ctrl+E">
-            {dockOpen ? "收起面板" : "展开面板"}
-          </button>
-        </div>
-      </header>
+      {/* 自绘标题栏（窗口无边框，见 internal/app/desktop.go） */}
+      <TitleBar
+        dockOpen={dockOpen}
+        onOpenDock={(d) => {
+          setDockOpen(true);
+          setDock(d);
+        }}
+        onToggleDock={() => setDockOpen((v) => !v)}
+      />
 
       <div className="flex min-h-0 flex-1">
         {/* 左侧栏 */}

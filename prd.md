@@ -831,6 +831,9 @@ end
 | eval 位置 | `internal/agent/eval` + `cmd/evalagent`，用例 JSONL，失败详情回喂重试 | 与 agent 同包便于复用 Host/沙箱；用例即数据，改 prompt 后 `-filter` 只跑相关类别省钱 |
 | 前端的任务开关 | 面板头部「脚本 / 图表」二选一，发送时作为 `task` 参数 | 双任务不是给模型自由选择的，是用户/流程决定的 |
 | 非编辑器入口写盘后的 UI 同步 | `scripts.Save` 统一广播 `script:changed`；前端按「有无未保存编辑」决定直接跟随还是弹外部修改提示 | 实测踩坑：AI 应用草稿后编辑器还显示旧脚本——写盘方不一定是编辑器（AI/CLI），编辑器只能靠事件换内容；用户手上有未保存编辑时绝不能静默覆盖 |
+| 窗口外壳 | `Frameless: true` + 自绘标题栏（`components/TitleBar.tsx`，`--wails-draggable` 拖拽）；Windows 保留 Aero 阴影/圆角/resize | 系统边框与深色主题割裂；Wails 在 Windows 的 frameless 仍支持边缘 resize，只要不设 `DisableFramelessWindowDecorations` |
+| 关闭按钮语义 | 标题栏 × 与 `WindowClosing` hook → **收进托盘**；托盘菜单「退出」才真退出（`quitting` 标志放行 hook） | 串口工具常驻心智：误关 × 不应丢串口现场；`internal/app/desktop.go` 是窗口/托盘行为的唯一出处 |
+| 托盘 | 常驻图标（`build/trayicon.png`，accent 青色自绘，黑 W 默认图在深色任务栏看不见）+ 菜单（显示主窗口/退出）+ 单击切换显隐、双击显示 | Win11 新图标默认进溢出区（^ 内）；tooltip 写明用途 |
 ---
 ## 落地要点总结
 1. **先建 eval，再写 Agent**：`internal/agent/eval/` 样本集在 M5 开始前就要有骨架，prompt 调优不能盲改；
