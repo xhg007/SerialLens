@@ -14,8 +14,8 @@ type SerialConfig struct {
 	Baudrate    int    `json:"baudrate"`
 	DataBits    int    `json:"data_bits"`
 	StopBits    int    `json:"stop_bits"`
-	Parity      string `json:"parity"`         // N / E / O
-	FlowControl string `json:"flow_control"`   // none / rtscts / xonxoff
+	Parity      string `json:"parity"`       // N / E / O
+	FlowControl string `json:"flow_control"` // none / rtscts / xonxoff
 	LastPort    string `json:"last_port"`
 }
 
@@ -43,8 +43,8 @@ type ProjectMeta struct {
 func DefaultMeta(name string) *ProjectMeta {
 	now := time.Now()
 	return &ProjectMeta{
-		Version:  "1.0",
-		Name:     name,
+		Version:   "1.0",
+		Name:      name,
 		CreatedAt: now,
 		UpdatedAt: now,
 		SerialConfig: SerialConfig{

@@ -5,6 +5,8 @@
 import { useTerminalStore } from "./stores/terminal";
 import { applyChartPoints } from "./stores/charts";
 import { useProjectStore } from "./stores/project";
+import { useEditorStore } from "./stores/editor";
+import { useParserStore } from "./stores/parser";
 import * as ChartsAPI from "../bindings/seriallens/internal/app/chartsapi";
 import * as ParserAPI from "../bindings/seriallens/internal/app/parserapi";
 
@@ -83,6 +85,10 @@ declare global {
     __slDevOpenProject?: (dir: string) => Promise<void>;
     __slDevReloadCharts?: () => Promise<void>;
     __slDevReloadScript?: () => Promise<void>;
+    __slDevEditorSetContent?: (text: string) => void;
+    __slDevEditorSave?: () => Promise<Record<string, unknown> | null>;
+    __slDevWaitField?: (name: string, timeoutMs?: number) => Promise<number>;
+    __slDevLastFields?: () => string[];
   }
 }
 
@@ -130,6 +136,32 @@ window.__slDevReloadCharts = async () => {
 };
 window.__slDevReloadScript = async () => {
   await ParserAPI.ReloadActiveScript();
+};
+
+// M4 验收：编辑器保存路径与「< 100ms 生效」的端到端测量。
+// 走 store 的 content → save 链路（与用户在 Monaco 里 Ctrl+S 完全一致），
+// 只差键盘事件本身。
+window.__slDevEditorSetContent = (text) => {
+  useEditorStore.setState({ content: text });
+};
+window.__slDevEditorSave = async () => {
+  await useEditorStore.getState().save();
+  const s = useEditorStore.getState().lastSave;
+  return s ? ({ ...s } as unknown as Record<string, unknown>) : null;
+};
+window.__slDevLastFields = () => {
+  const f = useParserStore.getState().last?.fields;
+  return f ? Object.keys(f) : [];
+};
+// 轮询到某字段出现在 frame:parsed 就返回耗时（ms），超时返回 -1。
+window.__slDevWaitField = async (name, timeoutMs = 2000) => {
+  const t0 = performance.now();
+  while (performance.now() - t0 < timeoutMs) {
+    const fields = useParserStore.getState().last?.fields;
+    if (fields && name in fields) return Math.round(performance.now() - t0);
+    await new Promise((r) => requestAnimationFrame(r));
+  }
+  return -1;
 };
 
 requestAnimationFrame(tick);

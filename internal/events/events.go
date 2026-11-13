@@ -24,9 +24,13 @@ const (
 	EvChartPoint  = "chart:point"  // payload: {points:[{ch,v,ts}]} 33ms 合批
 
 	// 脚本（M2）
-	EvScriptReloaded = "script:reloaded" // payload: {name}
-	EvScriptError    = "script:error"    // payload: {script, error, line}（1Hz 节流）
+	EvScriptReloaded = "script:reloaded" // payload: {name, source:"ui"|"external", compile_ms, load_ms}
+	EvScriptError    = "script:error"    // payload: {script, error, line, column}（1Hz 节流）
 	EvScriptLog      = "script:log"      // payload: {level, msg, ts}
+
+	// 编辑器（M4）
+	EvScriptChanged = "script:changed" // payload: {name, content, source:"ui"|"external", removed?}
+	EvScriptList    = "script:list"    // payload: {files:[{name,size,mod_time,active,has_error}]}
 
 	// 图表（M3）
 	EvChartsUpdated = "charts:updated" // payload: {config(map), source:"project"|"external"|"ui"}

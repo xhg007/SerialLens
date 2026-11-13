@@ -12,6 +12,7 @@ import (
 	"seriallens/internal/lua"
 	"seriallens/internal/parser"
 	"seriallens/internal/project"
+	"seriallens/internal/scripts"
 )
 
 // newWiredServices 手工装配与 main.go 等价的管线，但串口换成 mockPort：
@@ -33,6 +34,10 @@ func newWiredServices(t *testing.T) (*Services, *mockPort, *eventLog) {
 	})
 	s.Serial.SetRawTap(s.pipe.Ingest)
 	s.charts = charts.NewService(log.emit)
+	s.scripts = scripts.New(log.emit)
+	s.scripts.SetLoader(func(name string, src []byte) error {
+		return s.pipe.LoadScriptSource(name, src)
+	})
 	s.Project = newProjectService(s)
 	s.Project.svc.SetEmitter(log.emit) // 生产由 ProjectService.ServiceStartup 注入
 	s.Project.svc.SetHooks(&switchHooks{s: s})
@@ -40,6 +45,8 @@ func newWiredServices(t *testing.T) (*Services, *mockPort, *eventLog) {
 
 	t.Cleanup(func() {
 		_ = s.Serial.Disconnect()
+		s.scripts.Close()
+		s.charts.Close()
 		s.pipe.Stop()
 		s.runtime.Close()
 	})
