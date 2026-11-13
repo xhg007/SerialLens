@@ -26,10 +26,11 @@ func NewProjectService() *ProjectService {
 
 // ServiceStartup 在应用启动时注入事件桥接。
 func (p *ProjectService) ServiceStartup(ctx context.Context, options application.ServiceOptions) error {
-	app := application.Get()
-	p.svc.SetEmitter(func(event string, payload map[string]any) {
-		app.Event.Emit(event, payload)
-	})
+	if app := application.Get(); app != nil {
+		p.svc.SetEmitter(func(event string, payload map[string]any) {
+			app.Event.Emit(event, payload)
+		})
+	}
 	return nil
 }
 

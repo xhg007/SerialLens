@@ -2,19 +2,22 @@ import { useEffect, useState } from "react";
 import { useProjectStore } from "../stores/project";
 
 export function ProjectSwitcher() {
-  const { current, recents, openProject, createProject, closeProject, refreshRecents, removeRecent } =
+  const { current, recents, lastError, openProject, createProject, closeProject, refreshRecents, removeRecent } =
     useProjectStore();
   const [showCreate, setShowCreate] = useState(false);
   const [dir, setDir] = useState("");
   const [name, setName] = useState("");
   const [error, setError] = useState("");
   const [showRecents, setShowRecents] = useState(false);
+  const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     void refreshRecents();
   }, [refreshRecents]);
 
   const doCreate = async () => {
+    if (busy) return;
+    setBusy(true);
     setError("");
     try {
       await createProject(dir, name, "");
@@ -23,16 +26,22 @@ export function ProjectSwitcher() {
       setName("");
     } catch (e: any) {
       setError(String(e?.message ?? e));
+    } finally {
+      setBusy(false);
     }
   };
 
   const doOpen = async (path: string) => {
+    if (busy) return;
+    setBusy(true);
     setError("");
     try {
       await openProject(path);
       setShowRecents(false);
     } catch (e: any) {
       setError(String(e?.message ?? e));
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -86,10 +95,11 @@ export function ProjectSwitcher() {
             onChange={(e) => setName(e.target.value)}
           />
           <button
-            className="w-full rounded-panel bg-accent px-2 py-1 text-xs font-semibold text-bg-0 hover:opacity-90"
+            className="w-full rounded-panel bg-accent px-2 py-1 text-xs font-semibold text-bg-0 hover:opacity-90 disabled:opacity-50"
+            disabled={busy || !dir || !name}
             onClick={() => void doCreate()}
           >
-            创建工程
+            {busy ? "创建中…" : "创建工程"}
           </button>
         </div>
       )}
@@ -121,7 +131,7 @@ export function ProjectSwitcher() {
         </ul>
       )}
 
-      {error && <div className="mt-2 text-xs text-danger">{error}</div>}
+      {(error || lastError) && <div className="mt-2 text-xs text-danger">{error || lastError}</div>}
     </section>
   );
 }

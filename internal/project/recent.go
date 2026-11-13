@@ -39,6 +39,9 @@ func NewRecentStore(home string) *RecentStore {
 		homeDir, err := os.UserHomeDir()
 		if err == nil {
 			home = filepath.Join(homeDir, ".seriallens")
+		} else {
+			// 主目录不可用时不得退化为相对路径（会写进 CWD），用临时目录兜底
+			home = filepath.Join(os.TempDir(), ".seriallens")
 		}
 	}
 	return &RecentStore{home: home, missing: map[string]bool{}}
@@ -62,7 +65,9 @@ func (r *RecentStore) listLocked() []RecentEntry {
 	}
 	var doc recentFile
 	if err := json.Unmarshal(raw, &doc); err != nil {
-		return nil // 损坏文件视为空列表，不 panic
+		// 损坏文件备份为 .bak 后视为空列表：不静默丢弃用户原数据
+		_ = os.Rename(r.filePath(), r.filePath()+".bak")
+		return nil
 	}
 	list := doc.Projects
 	for i := range list {
@@ -167,5 +172,10 @@ func (r *RecentStore) saveLocked(list []RecentEntry) error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(r.filePath(), raw, 0o644)
+	// 原子写：tmp + rename，进程被杀不产生截断 JSON
+	tmp := r.filePath() + ".tmp"
+	if err := os.WriteFile(tmp, raw, 0o644); err != nil {
+		return err
+	}
+	return os.Rename(tmp, r.filePath())
 }

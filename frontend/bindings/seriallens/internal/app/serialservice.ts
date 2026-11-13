@@ -23,7 +23,8 @@ export function Connect(cfg: { [_ in string]?: any } | null): $CancellablePromis
 }
 
 /**
- * Disconnect 关闭串口并停止读 goroutine。
+ * Disconnect 关闭串口并等待读 goroutine 退出（每次连接独立 stop/done，
+ * 不复用 Once —— 否则重连后 close 永不生效，泄漏 goroutine）。
  */
 export function Disconnect(): $CancellablePromise<void> {
     return $Call.ByID(1053124306);

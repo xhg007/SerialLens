@@ -80,6 +80,31 @@ func Validate(m *ProjectMeta) error {
 	default:
 		return fmt.Errorf("invalid parity %q", m.SerialConfig.Parity)
 	}
+	switch m.SerialConfig.DataBits {
+	case 5, 6, 7, 8:
+	default:
+		return fmt.Errorf("invalid data_bits %d", m.SerialConfig.DataBits)
+	}
+	switch m.SerialConfig.StopBits {
+	case 1, 2, 15: // 15 == 1.5 stop bits（int 无法表达 1.5，编码约定）
+	default:
+		return fmt.Errorf("invalid stop_bits %d", m.SerialConfig.StopBits)
+	}
+	switch m.SerialConfig.FlowControl {
+	case "none", "rtscts", "xonxoff":
+	default:
+		return fmt.Errorf("invalid flow_control %q", m.SerialConfig.FlowControl)
+	}
+	if m.ActiveScript != "" {
+		// 工程可跨机迁移（PRD §3.2），脚本名必须为 scripts/ 下的纯文件名，
+		// 拒绝路径分隔符与 .. 逃逸（I7 安全面）。
+		if filepath.Base(m.ActiveScript) != m.ActiveScript || m.ActiveScript == "." || m.ActiveScript == ".." {
+			return fmt.Errorf("active_script %q must be a plain file name", m.ActiveScript)
+		}
+		if filepath.Ext(m.ActiveScript) != ".lua" {
+			return fmt.Errorf("active_script %q must end with .lua", m.ActiveScript)
+		}
+	}
 	return nil
 }
 

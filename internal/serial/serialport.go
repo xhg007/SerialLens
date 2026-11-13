@@ -2,6 +2,7 @@ package serial
 
 import (
 	"fmt"
+	"sync"
 
 	"go.bug.st/serial"
 )
@@ -28,8 +29,16 @@ func validateConfig(cfg Config) error {
 }
 
 // SerialPort go.bug.st 实现。
+// mu 只保护 port 指针的读写；不包裹阻塞的 Read/Write，否则 Close 无法打断读。
 type SerialPort struct {
+	mu   sync.Mutex
 	port serial.Port
+}
+
+func (s *SerialPort) current() serial.Port {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.port
 }
 
 // NewPort 返回系统串口实现。
@@ -57,9 +66,7 @@ func (s *SerialPort) Open(cfg Config) error {
 		// 打开时显式报错而非静默忽略。
 		return fmt.Errorf("flow control %q not supported yet; use none", cfg.FlowControl)
 	}
-	if s.port != nil {
-		_ = s.port.Close()
-	}
+	_ = s.Close()
 	mode := &serial.Mode{
 		BaudRate: cfg.BaudRate,
 		DataBits: cfg.DataBits,
@@ -70,7 +77,9 @@ func (s *SerialPort) Open(cfg Config) error {
 	if err != nil {
 		return err
 	}
+	s.mu.Lock()
 	s.port = port
+	s.mu.Unlock()
 	return nil
 }
 
@@ -86,30 +95,34 @@ func stopBits(n int) serial.StopBits {
 }
 
 func (s *SerialPort) Close() error {
-	if s.port == nil {
+	s.mu.Lock()
+	p := s.port
+	s.port = nil
+	s.mu.Unlock()
+	if p == nil {
 		return nil
 	}
-	err := s.port.Close()
-	s.port = nil
-	return err
+	return p.Close()
 }
 
 func (s *SerialPort) Read(p []byte) (int, error) {
-	if s.port == nil {
+	pt := s.current()
+	if pt == nil {
 		return 0, fmt.Errorf("port not open")
 	}
-	return s.port.Read(p)
+	return pt.Read(p)
 }
 
 func (s *SerialPort) Write(p []byte) (int, error) {
-	if s.port == nil {
+	pt := s.current()
+	if pt == nil {
 		return 0, fmt.Errorf("port not open")
 	}
-	return s.port.Write(p)
+	return pt.Write(p)
 }
 
 func (s *SerialPort) IsOpen() bool {
-	return s.port != nil
+	return s.current() != nil
 }
 
 // Enumerate 枚举系统串口（含 USB 热插拔后的新端口）。

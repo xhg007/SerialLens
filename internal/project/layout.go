@@ -16,8 +16,21 @@ func Scaffold(dir, name, description string) (*ProjectMeta, error) {
 	if IsProject(dir) {
 		return nil, fmt.Errorf("%s already contains a project.json", dir)
 	}
+	_, statErr := os.Stat(dir)
+	dirExisted := statErr == nil
+
 	meta := DefaultMeta(name)
 	meta.Description = description
+
+	meta, err := scaffoldInto(dir, meta)
+	if err != nil && !dirExisted {
+		// 只清理本次新建的目录，绝不删除用户已有目录
+		_ = os.RemoveAll(dir)
+	}
+	return meta, err
+}
+
+func scaffoldInto(dir string, meta *ProjectMeta) (*ProjectMeta, error) {
 
 	dirs := []string{
 		filepath.Join(dir, "scripts"),

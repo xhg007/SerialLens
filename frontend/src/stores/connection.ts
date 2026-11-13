@@ -31,14 +31,19 @@ export interface ConnectionState {
   send: (data: string, hexMode: boolean) => Promise<void>;
 }
 
+// HMR 安全：模块重新求值时先取消旧订阅。
+const unsubs: (() => void)[] = [];
+
 export const useConnectionStore = create<ConnectionState>((set, get) => {
-  Events.On("serial:status", (ev: any) => {
-    set({
-      state: (ev.data?.state ?? "disconnected") as ConnectionState["state"],
-      bytesIn: Number(ev.data?.bytes_in ?? 0),
-      bytesOut: Number(ev.data?.bytes_out ?? 0),
-    });
-  });
+  unsubs.push(
+    Events.On("serial:status", (ev: any) => {
+      set({
+        state: (ev.data?.state ?? "disconnected") as ConnectionState["state"],
+        bytesIn: Number(ev.data?.bytes_in ?? 0),
+        bytesOut: Number(ev.data?.bytes_out ?? 0),
+      });
+    }),
+  );
 
   return {
     state: "disconnected",
@@ -61,3 +66,7 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
     },
   };
 });
+
+if (import.meta.hot) {
+  import.meta.hot.dispose(() => unsubs.splice(0).forEach((off) => off()));
+}

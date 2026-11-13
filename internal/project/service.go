@@ -60,18 +60,21 @@ func (s *Service) Current() (dir string, meta *ProjectMeta, ok bool) {
 }
 
 // Create 生成目录骨架并打开工程。
+// 磁盘 IO 与 emit 均在锁外，锁内只做状态替换（避免监听者回调自死锁）。
 func (s *Service) Create(dir, name, description string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	meta, err := Scaffold(dir, name, description)
 	if err != nil {
 		return err
 	}
+	payload := openedPayload(dir, meta)
+	s.mu.Lock()
 	s.meta = meta
 	s.current = dir
 	s.state = StateProjectOpen
+	s.mu.Unlock()
+
 	_ = s.recents.RecordOpen(dir, name)
-	s.emitOpen()
+	s.emit(events.EvProjectOpened, payload)
 	return nil
 }
 
@@ -79,8 +82,6 @@ func (s *Service) Create(dir, name, description string) error {
 // 失败时保持现有状态不变并 emit EvProjectError —— M2+ 将在此插入
 // 串口断开与 Lua 字节码清理）。
 func (s *Service) Open(dir string) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
 	meta, err := LoadMeta(dir)
 	if err != nil {
 		s.emit(events.EvProjectError, map[string]any{
@@ -89,34 +90,39 @@ func (s *Service) Open(dir string) error {
 		})
 		return err
 	}
+	payload := openedPayload(dir, meta)
+	s.mu.Lock()
 	s.meta = meta
 	s.current = dir
 	s.state = StateProjectOpen
+	s.mu.Unlock()
+
 	_ = s.recents.RecordOpen(dir, meta.Name)
-	s.emitOpen()
+	s.emit(events.EvProjectOpened, payload)
 	return nil
 }
 
 // Close 关闭当前工程。
 func (s *Service) Close() error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	if s.state != StateProjectOpen {
+		s.mu.Unlock()
 		return nil
 	}
 	s.meta = nil
 	s.current = ""
 	s.state = StateNoProject
+	s.mu.Unlock()
 	s.emit(events.EvProjectClosed, map[string]any{})
 	return nil
 }
 
-func (s *Service) emitOpen() {
-	sc := s.meta.SerialConfig
-	s.emit(events.EvProjectOpened, map[string]any{
-		"path":          s.current,
-		"name":          s.meta.Name,
+func openedPayload(dir string, meta *ProjectMeta) map[string]any {
+	sc := meta.SerialConfig
+	return map[string]any{
+		"path":          dir,
+		"name":          meta.Name,
 		"serial_config": map[string]any{"baudrate": sc.Baudrate, "data_bits": sc.DataBits, "stop_bits": sc.StopBits, "parity": sc.Parity, "flow_control": sc.FlowControl, "last_port": sc.LastPort},
-		"active_script": s.meta.ActiveScript,
-	})
+		"active_script": meta.ActiveScript,
+	}
 }

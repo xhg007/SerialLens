@@ -22,13 +22,13 @@ type SerialService struct {
 	port serial.Port
 	emit events.Emitter
 
-	mu       sync.Mutex
+	mu        sync.Mutex
 	connected bool
-	bytesIn  uint64
-	bytesOut uint64
-	stop     chan struct{}
-	stopOnce sync.Once
-	reading  bool
+	bytesIn   uint64
+	bytesOut  uint64
+	stop      chan struct{}
+	done      chan struct{}
+	reading   bool
 }
 
 func NewSerialService(port serial.Port, emit events.Emitter) *SerialService {
@@ -45,18 +45,22 @@ func NewSerialServiceWithDefault() *SerialService {
 
 // ServiceStartup 在应用启动时注入事件桥接。
 func (s *SerialService) ServiceStartup(ctx context.Context, options application.ServiceOptions) error {
-	app := application.Get()
-	s.SetEmitter(func(event string, payload map[string]any) {
-		app.Event.Emit(event, payload)
-	})
+	if app := application.Get(); app != nil {
+		s.SetEmitter(func(event string, payload map[string]any) {
+			app.Event.Emit(event, payload)
+		})
+	}
 	return nil
 }
 
 // SetEmitter 在 Wails ServiceStartup 阶段注入事件桥接。
 func (s *SerialService) SetEmitter(fn events.Emitter) {
-	if fn != nil {
-		s.emit = fn
+	if fn == nil {
+		return
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.emit = fn
 }
 
 // ListPorts 枚举系统串口。
@@ -90,14 +94,24 @@ func (s *SerialService) Connect(cfg map[string]any) error {
 	if err := s.port.Open(c); err != nil {
 		return err
 	}
+	stop := make(chan struct{})
+	done := make(chan struct{})
 	s.mu.Lock()
 	s.connected = true
-	s.stop = make(chan struct{})
-	stop := s.stop
+	s.reading = true
+	s.stop = stop
+	s.done = done
 	s.mu.Unlock()
-	go s.readLoop(stop)
+	go s.readLoop(stop, done)
 	s.emitStatus()
 	return nil
+}
+
+// emitter 并发安全读取事件桥接（readLoop 在无锁路径使用）。
+func (s *SerialService) emitter() events.Emitter {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.emit
 }
 
 func parseConfig(cfg map[string]any) (serial.Config, error) {
@@ -151,24 +165,42 @@ func parseConfig(cfg map[string]any) (serial.Config, error) {
 	return c, nil
 }
 
-// Disconnect 关闭串口并停止读 goroutine。
+// Disconnect 关闭串口并等待读 goroutine 退出（每次连接独立 stop/done，
+// 不复用 Once —— 否则重连后 close 永不生效，泄漏 goroutine）。
 func (s *SerialService) Disconnect() error {
 	s.mu.Lock()
 	if !s.connected {
 		s.mu.Unlock()
 		return nil
 	}
-	stop := s.stop
+	stop, done := s.stop, s.done
+	s.stop, s.done = nil, nil
 	s.connected = false
 	s.mu.Unlock()
-	s.stopOnce.Do(func() { close(stop) })
+
+	if stop != nil {
+		close(stop)
+	}
 	err := s.port.Close()
+	if done != nil {
+		select {
+		case <-done:
+		case <-time.After(time.Second):
+			// 驱动未响应 Close：readLoop 仍会因读错误退出，不阻塞 UI
+		}
+	}
 	s.emitStatus()
 	return err
 }
 
 // Send 发送数据。hexMode=true 时 data 为空格分隔的 HEX 字符串；否则原样发送。
 func (s *SerialService) Send(data string, hexMode bool) error {
+	s.mu.Lock()
+	connected := s.connected
+	s.mu.Unlock()
+	if !connected {
+		return fmt.Errorf("not connected")
+	}
 	var payload []byte
 	if hexMode {
 		clean := strings.Join(strings.Fields(data), "")
@@ -217,7 +249,14 @@ func (s *SerialService) emitStatus() {
 }
 
 // readLoop 读串口 → 33ms 合帧批量推送；读错误即断开（不 panic、不泄漏）。
-func (s *SerialService) readLoop(stop chan struct{}) {
+// done 在退出时关闭，供 Disconnect 等待。
+func (s *SerialService) readLoop(stop, done chan struct{}) {
+	defer close(done)
+	defer func() {
+		s.mu.Lock()
+		s.reading = false
+		s.mu.Unlock()
+	}()
 	buf := make([]byte, 4096)
 	var pending []byte
 	ticker := time.NewTicker(time.Duration(batchIntervalMs) * time.Millisecond)
@@ -227,10 +266,12 @@ func (s *SerialService) readLoop(stop chan struct{}) {
 		if len(pending) == 0 {
 			return
 		}
-		s.emit(events.EvSerialData, map[string]any{
-			"hex": strings.ToUpper(hex.EncodeToString(pending)),
-			"ts":  time.Now().UnixMilli(),
-		})
+		if em := s.emitter(); em != nil {
+			em(events.EvSerialData, map[string]any{
+				"hex": strings.ToUpper(hex.EncodeToString(pending)),
+				"ts":  time.Now().UnixMilli(),
+			})
+		}
 		pending = pending[:0]
 	}
 
@@ -239,9 +280,14 @@ func (s *SerialService) readLoop(stop chan struct{}) {
 		case <-stop:
 			flush()
 			return
-		case <-ticker.C:
-			flush()
 		default:
+			if len(pending) > 0 {
+				select {
+				case <-ticker.C:
+					flush()
+				default:
+				}
+			}
 			n, err := s.port.Read(buf)
 			if err != nil {
 				flush()

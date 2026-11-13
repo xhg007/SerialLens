@@ -38,9 +38,10 @@ export function TerminalPanel() {
     try {
       await send(input, hexMode);
       useTerminalStore.getState().append({
-        hex: input.toUpperCase().replace(/\s+/g, " "),
+        hex: hexMode ? input.toUpperCase().replace(/\s+/g, " ") : input,
         ts: Date.now(),
         direction: "tx",
+        mode: hexMode ? "hex" : "text",
       });
       setInput("");
     } catch (e: any) {
@@ -55,8 +56,8 @@ export function TerminalPanel() {
       className="min-h-0 flex-1 overflow-auto bg-bg-0 px-2 py-1 text-sm leading-relaxed"
     >
       {filtered.length === 0 && <div className="text-text-2">等待数据…</div>}
-      {filtered.map((l, i) => (
-        <div key={i} className="whitespace-pre">
+      {filtered.map((l) => (
+        <div key={l.id} className="whitespace-pre">
           <span className="text-text-2">{ts(l.ts)}</span>
           <span className={`mx-2 ${l.direction === "rx" ? "text-rx" : "text-tx"}`}>
             {l.direction === "rx" ? "RX" : "TX"}
