@@ -29,6 +29,9 @@ type SerialService struct {
 	stop      chan struct{}
 	done      chan struct{}
 	reading   bool
+
+	// rawTap 原始字节旁路（M2 解析管线）：在读循环内同步调用，实现方必须非阻塞。
+	tap func([]byte)
 }
 
 func NewSerialService(port serial.Port, emit events.Emitter) *SerialService {
@@ -61,6 +64,37 @@ func (s *SerialService) SetEmitter(fn events.Emitter) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.emit = fn
+}
+
+// SetRawTap 注入原始字节旁路（解析管线）。实现必须非阻塞，否则会拖慢串口读。
+func (s *SerialService) SetRawTap(fn func([]byte)) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.tap = fn
+}
+
+// SendRaw 供 Lua send_bytes 使用：跳过 hex 解析，直接写串口。
+func (s *SerialService) SendRaw(data []byte) error {
+	s.mu.Lock()
+	connected := s.connected
+	s.mu.Unlock()
+	if !connected {
+		return fmt.Errorf("not connected")
+	}
+	n, err := s.port.Write(data)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.bytesOut += uint64(n)
+	s.mu.Unlock()
+	return nil
+}
+
+func (s *SerialService) rawTap() func([]byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.tap
 }
 
 // ListPorts 枚举系统串口。
@@ -332,6 +366,9 @@ func (s *SerialService) readLoop(stop, done chan struct{}) {
 			s.mu.Lock()
 			s.bytesIn += uint64(len(chunk))
 			s.mu.Unlock()
+			if tap := s.rawTap(); tap != nil {
+				tap(chunk) // 解析管线旁路：终端显示与帧解析共用同一份原始字节
+			}
 		case <-ticker.C:
 			flush()
 			// 流式期间按 1Hz 刷新状态事件，否则前端 RX/TX 计数只在连接/断开时更新

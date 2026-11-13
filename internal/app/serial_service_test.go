@@ -43,11 +43,16 @@ func (m *mockPort) IsOpen() bool {
 	return m.open
 }
 func (m *mockPort) Read(p []byte) (int, error) {
-	if m.readErr != nil {
-		return 0, m.readErr
+	// 读循环在独立 goroutine 里跑，readErr/readCh 必须在锁内取快照（-race 会报）
+	m.mu.Lock()
+	err := m.readErr
+	ch := m.readCh
+	m.mu.Unlock()
+	if err != nil {
+		return 0, err
 	}
 	select {
-	case data := <-m.readCh:
+	case data := <-ch:
 		n := copy(p, data)
 		return n, nil
 	case <-time.After(50 * time.Millisecond):

@@ -261,8 +261,10 @@ Record (循环):    ts_delta_ms(uint32) | direction(uint8) | length(uint16) | pa
 6. 加载新工程：project.json → 注册脚本 → charts.json → 对话摘要 → emit `project:opened`
 **任意一步失败**：回滚至 NoProject，弹错误提示，禁止半加载状态。
 
-> **实现状态（2026-11-13，M0/M1）**：当前仅实现 `NoProject` / `ProjectOpen` 两态，`ProjectSwitching` 待 M2 引入串口断开与 Lua 字节码清理后补齐。
-> 切换失败的实际语义为「**保留原工程** + `emit project:error`」，与上句「回滚至 NoProject」不同：M0 阶段尚无 Runtime/charts/AI 会话需要清理，丢弃用户当前工程反而更危险；待 M2 有真实清理步骤后再按上图回滚。
+> **实现状态（2026-11-13，M2）**：三态已全部实现。`ProjectSwitching` 在 `project.Service.activate` 中置位，切换顺序为「预校验新工程 → 置 Switching → `SwitchHooks.BeforeSwitch`（断串口 + 清 Lua 字节码）→ 激活新工程 → `AfterOpen`（加载 active_script）→ 回 ProjectOpen」。
+> **失败语义保留 M0 裁决「取消切换并停留在原工程」**，而非回滚到 NoProject：`BeforeSwitch` 失败时旧工程资源仍在、`meta/current` 未被覆盖，回滚到 NoProject 会让用户白白丢掉当前工程；预校验失败（新工程 `project.json` 读不出来）则根本不进入拆卸步骤。关闭工程时 `BeforeSwitch` 失败**不阻塞关闭**（只 `emit project:error`），否则工程会关不掉。
+> 脚本加载失败（`AfterOpen`）同样不回滚工程，只 `emit script:error` —— 脚本坏了不该把整个工程锁死。
+> 并发切换由 `StateProjectSwitching` 直接拒绝（`project switch already in progress`）。
 ## 3.9 工程模板
 | 模板 | 预置内容 |
 |---|---|
@@ -641,7 +643,7 @@ const (
 |---|---|---|---|
 | **M0 工程域** | 第 0.5 周 | ProjectService + 目录骨架 + project.json + 最近列表 | 打开/切换/关闭状态机正确；切换后 Runtime 残留字节码 = 0（**M0 阶段 N/A：无 Lua Runtime，M2 生效**） |
 | **M1 骨架** | 第 1 周 | Wails3 工程 + SerialService + 终端回显 + 工程切换器 UI | 115200 稳定收发 0 丢包；UI 不冻结（**实测见 `docs/acceptance/m0-m1.md`**） |
-| **M2 Lua 引擎** | 第 2~3 周 | LuaRuntime + 池 + 沙箱 + 全量内置 API + frame:parsed | Modbus 示例脚本解析正确；`-race` 下 100 goroutine 并发压测通过；1Mbps 持续 10 分钟 0 崩溃 |
+| **M2 Lua 引擎** | 第 2~3 周 | LuaRuntime + 池 + 沙箱 + 全量内置 API + frame:parsed | Modbus 示例脚本解析正确；`-race` 下 100 goroutine 并发压测通过；1Mbps 持续 10 分钟 0 崩溃（**实测见 `docs/acceptance/m2-lua-runtime.md`**） |
 | **M3 图表** | 第 4 周 | ChartsService + charts.json 加载 + uPlot/ECharts 渲染 | 10 通道 × 100Hz 流畅；外部编辑 charts.json 实时同步 |
 | **M4 编辑器+热重载** | 第 5 周 | Monaco + fsnotify + 保存即生效 + 错误行号回显 | 修改脚本 < 100ms 生效 |
 | **M5 AI Agent** | 第 6~7 周 | 双任务状态机 + JSONL 会话 + 12 工具 + Diff 确认 + charts 联动 | 首试通过率 ≥ 50%，3 轮自修复 ≥ 85%；安全用例 100%；eval 集成 CI |
@@ -711,12 +713,26 @@ end
 | 事件常量位置 | 下沉到 `internal/events` 叶包 | `internal/project` 需要用常量，import `internal/app` 会形成循环依赖 |
 | 串口依赖 | `go.bug.st/serial v1.8.0`（PRD 原写 `github.com/bugst/go-serial/v2`，两处均有误） | 该库无 v2；v1 无流控 API，`flow_control` 配置保留、Open 时非 none 显式报错 |
 | payload 命名 | 全 snake_case（`bytes_in`/`bytes_out`/`serial_config`/`active_script`） | 与 Go 结构体 JSON tag 一致，前端不做大小写兜底 |
-| 状态机 | 两态（NoProject / ProjectOpen），ProjectSwitching 待 M2 | M0 无 Runtime/图表会话可清理 |
+| 状态机 | M0 两态；**M2 起三态**（补 ProjectSwitching） | M2 有串口/字节码需要拆卸，见 §3.8 实现状态 |
 | 切换失败 | 保留原工程 + `emit project:error` | 与 §3.8「回滚 NoProject」不同，理由见 §3.8 实现状态注记 |
 | emit 时机 | 状态替换后**锁外** emit | 监听者回调内读 `State()/Current()` 会自死锁（M2 串口断开逻辑必然踩到） |
 | 读循环结构 | 独立读 goroutine + select 驱动 33ms flush | 阻塞 `Read` 与定时器同循环会让尾部数据滞留（实测 15s+） |
 | 连接生命周期 | 每次连接独立 `stop`/`done` channel，Disconnect 等待读循环退出 | `sync.Once` 跨连接复用会让第二次 Disconnect 失效并泄漏 goroutine |
-| `-race` | M1 未执行（本机无 gcc） | M2 安装 MSYS2 后补跑 |
+| `-race` | 已补跑（2026-11-13，M2）：`PATH += C:\tools\msys64\mingw64\bin`、`CGO_ENABLED=1`，`go test -race ./internal/... ./cmd/loopcheck/` 全绿 | 本机 MSYS2 位于 `C:\tools\msys64`，`pacman -S mingw-w64-x86_64-gcc` 装到 gcc 16.2.0 |
+## 10.5 实现裁决记录（M2，2026-11-13）
+| 议题 | 裁决 | 原因 |
+|---|---|---|
+| Lua 解释器 | `github.com/yuin/gopher-lua v1.1.1` | 纯 Go、无 cgo（`CGO_ENABLED=0` 可发布），支持 `FunctionProto` 复用与 `SetContext` 逐指令超时检查 |
+| 沙箱范围 | 只开 base/table/string/math；base 内 `dofile`/`loadfile`/`load`/`loadstring`/`require`/`module`/`newproxy`/`collectgarbage` 置 nil | `io`/`os`/`package`/`debug` 一律不开；AI 生成脚本不得触达文件系统与进程，验收 `TestSandboxBlocksEscapes` 覆盖 8 个逃逸口 |
+| 超时 | 每次调用 `SetContext(deadline)` 5s，超时的 LState **销毁不归还** | 被中断的 VM 栈不可信；`TestTimeoutDiscardsState` 用 `while true do end` 验证 150ms 内打断且运行时自愈 |
+| LState 池 | 池内复用 + `cacheGen` 世代号；`Reset/LoadScript` 只关空闲 state，在用的归还时按世代销毁 | 直接 Close 在用的 LState 会 panic（gopher-lua 二次 Close 亦 panic，`clearLocked` 曾踩到） |
+| 字节码缓存 | 编译产物 `FunctionProto` 跨 state 复用，按脚本名缓存（`CacheSize()` 只计条目） | PRD「预编译字节码缓存」；工程切换 `Reset()` 后必须为 0 |
+| 切帧优先级 | 脚本有 `detect_frame` 用脚本边界，否则 IDLE 20ms | 粘包只能靠脚本救；IDLE 对无边界协议零配置可用 |
+| 超长帧 | 超过 `MaxFrame`（4096）强制切出 | 防脚本 bug / 垃圾数据把内存吃满；脚本返回非法边界 → `ErrBadBoundary` + 丢缓冲 |
+| 图表合批 | 33ms 定时 flush `chart:point` | 与串口合帧口径一致（ADR-02），避免 1000Hz 帧率下每点一事件 |
+| 入站队列 | 串口 `Ingest` 非阻塞入 256 缓冲，满则丢弃并计数 | 串口读循环绝不能被慢脚本拖住；`dropped` 计数进 `Stats()` 便于验收 |
+| 脚本错误 | `script:log` 每帧上报，`script:error` 1Hz 节流 | 脚本每帧都错时不能把前端刷屏刷死 |
+| `send_bytes` | 直接走 `SerialService.SendRaw`（跳过 hex 解析） | 编码结果已是二进制，再转 hex 往返是浪费 |
 ---
 ## 落地要点总结
 1. **先建 eval，再写 Agent**：`internal/agent/eval/` 样本集在 M5 开始前就要有骨架，prompt 调优不能盲改；

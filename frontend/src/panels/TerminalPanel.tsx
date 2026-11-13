@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useConnectionStore } from "../stores/connection";
+import { useParserStore } from "../stores/parser";
 import { useTerminalStore } from "../stores/terminal";
 
 const TOOLBTN =
@@ -57,6 +58,8 @@ export function TerminalPanel() {
     }
   };
 
+  const fieldsBar = <FieldsBar />;
+
   const body = (
     <div
       ref={scrollRef}
@@ -99,6 +102,7 @@ export function TerminalPanel() {
       <button className={`${TOOLBTN} ml-auto`} onClick={toggleFullscreen} title="全屏 (Esc 退出)">
         ⛶ 全屏
       </button>
+      {fieldsBar}
     </div>
   );
 
@@ -186,4 +190,26 @@ function ts(ms: number): string {
   const d = new Date(ms);
   const p = (n: number) => String(n).padStart(2, "0");
   return `${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}.${String(d.getMilliseconds()).padStart(3, "0")}`;
+}
+
+// FieldsBar 展示最近一帧的解析结果（M2：验证 Lua 脚本输出落到 UI 的最短路径）。
+function FieldsBar() {
+  const script = useParserStore((s) => s.script);
+  const last = useParserStore((s) => s.last);
+  if (!script || !last || !last.fields) return null;
+  const entries = Object.entries(last.fields).slice(0, 10);
+  return (
+    <div className="flex w-full flex-wrap items-center gap-2 border-t border-border/60 pt-1 text-[11px] text-text-2">
+      <span className="text-accent">字段</span>
+      {entries.map(([k, v]) => (
+        <span key={k} className="rounded-panel bg-bg-2 px-1.5 py-0.5">
+          <span className="text-text-2">{k}=</span>
+          <span className="text-rx">
+            {v === null || typeof v !== "object" ? String(v) : JSON.stringify(v)}
+          </span>
+        </span>
+      ))}
+      <span className="ml-auto">{last.durationUs} µs</span>
+    </div>
+  );
 }
