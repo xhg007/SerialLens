@@ -223,6 +223,13 @@
 - 所有写入（无论 AI 还是程序）必须通过 JSON Schema 校验，失败不落盘
 - **AI 不覆盖用户已调整的 `position`**，只追加/更新通道相关字段
 - UI 支持拖拽调整布局并回写 charts.json
+
+> **实现状态（2026-11-13，M3）**：
+> - 校验落在 `internal/charts.Config.NormalizeAndValidate()`（手写 schema，无第三方依赖）：widget `id` 唯一、`type` 四选一、`position` 不越界、`range` 单调、`display_digits` 0..6、`window_seconds` 1..3600、`y_axis_mode` auto|fixed；写盘走 tmp+rename 原子替换，**校验失败不改动原文件**。
+> - `channels` 额外支持 `"auto"`：绑定脚本实际 `emit_chart` 出来的全部通道（含空数组/缺省）。新工程模板即用 `"auto"`，脚本改通道无需同步改图表配置。
+> - 已实现 widget：`line`（uPlot）、`gauge`（ECharts 按需引入）、`indicator`（原生 DOM 指示灯，不引 ECharts——一个 LED 不值得多 100KB）、`field_table`（最近一帧字段）。
+> - **拖拽布局尚未实现**（M3 未纳入验收）：`SaveChartsConfig()` 接口与校验已就绪，接一个 dnd 层即可，留待 M4/M5 编辑器联动时一起做。
+> - Windows 记事本 / PowerShell 5.1 写出带 UTF-8 BOM 的文件可以正常读取（`trimBOM`）。
 ## 3.6 AI 对话历史持久化
 每会话一个 JSONL 文件（一行一事件，追加写入，崩溃不丢）：
 ```jsonl
@@ -624,7 +631,8 @@ const (
     EvScriptError     = "script:error"     // {script,error,line}
     EvScriptLog       = "script:log"
     // 图表与 AI
-    EvChartsUpdated   = "charts:updated"   // {source:"ai"|"user",widgets_count}
+    EvChartsUpdated   = "charts:updated"   // {config:map,source:"project"|"external"|"ui"}（M3 实现：整份配置下推）
+    EvChartsError     = "charts:error"     // {message} 外部编辑非法时保留旧配置、不落盘
     EvAgentStep       = "agent:step"       // 进度/日志
     EvAgentDiff       = "agent:diff"       // 草稿 diff 预览
     EvAgentConfirm    = "agent:confirm_request" // 确认弹窗
@@ -644,7 +652,7 @@ const (
 | **M0 工程域** | 第 0.5 周 | ProjectService + 目录骨架 + project.json + 最近列表 | 打开/切换/关闭状态机正确；切换后 Runtime 残留字节码 = 0（**M0 阶段 N/A：无 Lua Runtime，M2 生效**） |
 | **M1 骨架** | 第 1 周 | Wails3 工程 + SerialService + 终端回显 + 工程切换器 UI | 115200 稳定收发 0 丢包；UI 不冻结（**实测见 `docs/acceptance/m0-m1.md`**） |
 | **M2 Lua 引擎** | 第 2~3 周 | LuaRuntime + 池 + 沙箱 + 全量内置 API + frame:parsed | Modbus 示例脚本解析正确；`-race` 下 100 goroutine 并发压测通过；1Mbps 持续 10 分钟 0 崩溃（**实测见 `docs/acceptance/m2-lua-runtime.md`**） |
-| **M3 图表** | 第 4 周 | ChartsService + charts.json 加载 + uPlot/ECharts 渲染 | 10 通道 × 100Hz 流畅；外部编辑 charts.json 实时同步 |
+| **M3 图表** | 第 4 周 | ChartsService + charts.json 加载 + uPlot/ECharts 渲染 | 10 通道 × 100Hz 流畅；外部编辑 charts.json 实时同步（**实测见 `docs/acceptance/m3-charts.md`**） |
 | **M4 编辑器+热重载** | 第 5 周 | Monaco + fsnotify + 保存即生效 + 错误行号回显 | 修改脚本 < 100ms 生效 |
 | **M5 AI Agent** | 第 6~7 周 | 双任务状态机 + JSONL 会话 + 12 工具 + Diff 确认 + charts 联动 | 首试通过率 ≥ 50%，3 轮自修复 ≥ 85%；安全用例 100%；eval 集成 CI |
 | **M6 收尾** | 第 8 周 | 录制回放、命令面板、3 工程模板、zip 导入导出、打包 | 三平台安装包 < 30MB；冷启动 < 2s；工程跨机迁移打开即用 |
@@ -733,6 +741,21 @@ end
 | 入站队列 | 串口 `Ingest` 非阻塞入 256 缓冲，满则丢弃并计数 | 串口读循环绝不能被慢脚本拖住；`dropped` 计数进 `Stats()` 便于验收 |
 | 脚本错误 | `script:log` 每帧上报，`script:error` 1Hz 节流 | 脚本每帧都错时不能把前端刷屏刷死 |
 | `send_bytes` | 直接走 `SerialService.SendRaw`（跳过 hex 解析） | 编码结果已是二进制，再转 hex 往返是浪费 |
+## 10.6 实现裁决记录（M3，2026-11-13）
+| 议题 | 裁决 | 原因 |
+|---|---|---|
+| 配置单一来源 | 磁盘 `charts.json` 是唯一真相，前端只渲染；`charts:updated` 每次整份配置下推 | 避免「前端草稿态 vs 磁盘」双份真相；AI 写入后前端无需自己 merge |
+| 自写判定 | 落盘后记录内容摘要（FNV-1a），文件事件到达时比对内容 | 时间窗（如 500ms）会把紧邻的真实外部编辑一起吃掉；实测就是被吃掉后才改的 |
+| watch 目标 | 监听**工程目录**并过滤 `charts.json`，不直接 watch 文件 | 我们的 Save 走 tmp+rename，直接 watch 文件在第一次保存后就失效 |
+| 外部非法编辑 | 保留旧配置 + `charts:error`，**不改写用户文件** | 用户手改 JSON 出错时要能自己修；程序覆盖掉就找不回原因了 |
+| `indicator` 渲染 | 原生 DOM 指示灯，不引 ECharts | 一个圆点不值得 +100KB；ECharts 只用于 `gauge` |
+| ECharts 体积 | `echarts/core` + `GaugeChart` + `CanvasRenderer` 按需引入 | 全量 echarts ≈ 1MB；按需后前端总包 583KB（gzip 198KB） |
+| 通道时间轴 | 所有通道共享一条全局 x 轴，缺测填 `NaN` 断线 | uPlot 单 x 轴；脚本在不同帧推不同通道时必须对齐，否则点会串位 |
+| 缓冲上限 | 20000 行（100Hz≈200 秒），溢出一次裁 2000 行 | 按行裁剪是 O(1) 摊销；逐点 shift 在 10ch×100Hz 下会把主线程拖垮 |
+| 图表提交时机 | `chart:point` 到达即提交（33ms 已是合批），前端不再二次节流 | 两层节流会让「实时波形」出现肉眼可见的滞后 |
+| 默认模板 | 空白模板预置「主折线 + 仪表 + 字段表」，全部 `channels:"auto"` | 新工程打开即有图可看；脚本改通道不用同步改配置 |
+| BOM | 读取时 `trimBOM` | 记事本 / PowerShell 5.1 的 UTF-8 带 BOM，实测直接解析失败 |
+| 拖拽布局 | **M3 未实现**，接口 `SaveChartsConfig` 已就绪 | M3 验收只要求渲染与热同步；拖拽与编辑器联动一起做更省事 |
 ---
 ## 落地要点总结
 1. **先建 eval，再写 Agent**：`internal/agent/eval/` 样本集在 M5 开始前就要有骨架，prompt 调优不能盲改；

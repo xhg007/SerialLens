@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"seriallens/internal/charts"
 	"seriallens/internal/events"
 	"seriallens/internal/lua"
 	"seriallens/internal/parser"
@@ -31,6 +32,7 @@ func newWiredServices(t *testing.T) (*Services, *mockPort, *eventLog) {
 		Idle:    20 * time.Millisecond,
 	})
 	s.Serial.SetRawTap(s.pipe.Ingest)
+	s.charts = charts.NewService(log.emit)
 	s.Project = newProjectService(s)
 	s.Project.svc.SetEmitter(log.emit) // 生产由 ProjectService.ServiceStartup 注入
 	s.Project.svc.SetHooks(&switchHooks{s: s})

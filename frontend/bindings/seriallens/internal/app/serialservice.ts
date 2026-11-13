@@ -52,8 +52,22 @@ export function Send(data: string, hexMode: boolean): $CancellablePromise<void> 
 }
 
 /**
+ * SendRaw 供 Lua send_bytes 使用：跳过 hex 解析，直接写串口。
+ */
+export function SendRaw(data: string | null): $CancellablePromise<void> {
+    return $Call.ByID(1715575232, data);
+}
+
+/**
  * SetEmitter 在 Wails ServiceStartup 阶段注入事件桥接。
  */
 export function SetEmitter(fn: events$0.Emitter): $CancellablePromise<void> {
     return $Call.ByID(1348617590, fn);
+}
+
+/**
+ * SetRawTap 注入原始字节旁路（解析管线）。实现必须非阻塞，否则会拖慢串口读。
+ */
+export function SetRawTap(fn: any): $CancellablePromise<void> {
+    return $Call.ByID(37462231, fn);
 }
