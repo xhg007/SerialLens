@@ -1,0 +1,246 @@
+package app
+
+import (
+	"encoding/hex"
+	"fmt"
+	"strings"
+	"sync"
+	"time"
+
+	"seriallens/internal/events"
+	"seriallens/internal/serial"
+)
+
+// batchIntervalMs 串口数据合帧间隔（PRD ADR-02：33ms 批量推送）。
+const batchIntervalMs = 33
+
+// SerialService Wails 薄壳：串口连接、读 goroutine、批量推送。
+type SerialService struct {
+	port serial.Port
+	emit events.Emitter
+
+	mu       sync.Mutex
+	connected bool
+	bytesIn  uint64
+	bytesOut uint64
+	stop     chan struct{}
+	stopOnce sync.Once
+	reading  bool
+}
+
+func NewSerialService(port serial.Port, emit events.Emitter) *SerialService {
+	if emit == nil {
+		emit = func(string, map[string]any) {}
+	}
+	return &SerialService{port: port, emit: emit, stop: make(chan struct{})}
+}
+
+// SetEmitter 在 Wails ServiceStartup 阶段注入事件桥接。
+func (s *SerialService) SetEmitter(fn events.Emitter) {
+	if fn != nil {
+		s.emit = fn
+	}
+}
+
+// ListPorts 枚举系统串口。
+func (s *SerialService) ListPorts() []map[string]any {
+	ports, err := serial.Enumerate()
+	if err != nil {
+		return []map[string]any{}
+	}
+	out := make([]map[string]any, 0, len(ports))
+	for _, p := range ports {
+		out = append(out, map[string]any{
+			"name": p.Name, "friendly": p.FriendlyName, "vid": p.VID, "pid": p.PID,
+		})
+	}
+	return out
+}
+
+// Connect 按参数打开串口并启动读 goroutine。
+// key: port, baudrate, data_bits, stop_bits, parity, flow_control。
+func (s *SerialService) Connect(cfg map[string]any) error {
+	c, err := parseConfig(cfg)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	if s.connected {
+		s.mu.Unlock()
+		return fmt.Errorf("already connected")
+	}
+	s.mu.Unlock()
+	if err := s.port.Open(c); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.connected = true
+	s.stop = make(chan struct{})
+	stop := s.stop
+	s.mu.Unlock()
+	go s.readLoop(stop)
+	s.emitStatus()
+	return nil
+}
+
+func parseConfig(cfg map[string]any) (serial.Config, error) {
+	getInt := func(key string, def int) (int, error) {
+		v, ok := cfg[key]
+		if !ok || v == nil {
+			return def, nil
+		}
+		switch n := v.(type) {
+		case int:
+			return n, nil
+		case float64:
+			return int(n), nil
+		case int64:
+			return int(n), nil
+		default:
+			return 0, fmt.Errorf("field %q must be a number", key)
+		}
+	}
+	getStr := func(key, def string) (string, error) {
+		v, ok := cfg[key]
+		if !ok || v == nil {
+			return def, nil
+		}
+		s, ok := v.(string)
+		if !ok {
+			return "", fmt.Errorf("field %q must be a string", key)
+		}
+		return s, nil
+	}
+	var c serial.Config
+	var err error
+	if c.PortName, err = getStr("port", ""); err != nil {
+		return c, err
+	}
+	if c.BaudRate, err = getInt("baudrate", 115200); err != nil {
+		return c, err
+	}
+	if c.DataBits, err = getInt("data_bits", 8); err != nil {
+		return c, err
+	}
+	if c.StopBits, err = getInt("stop_bits", 1); err != nil {
+		return c, err
+	}
+	if c.Parity, err = getStr("parity", "N"); err != nil {
+		return c, err
+	}
+	if c.FlowControl, err = getStr("flow_control", "none"); err != nil {
+		return c, err
+	}
+	return c, nil
+}
+
+// Disconnect 关闭串口并停止读 goroutine。
+func (s *SerialService) Disconnect() error {
+	s.mu.Lock()
+	if !s.connected {
+		s.mu.Unlock()
+		return nil
+	}
+	stop := s.stop
+	s.connected = false
+	s.mu.Unlock()
+	s.stopOnce.Do(func() { close(stop) })
+	err := s.port.Close()
+	s.emitStatus()
+	return err
+}
+
+// Send 发送数据。hexMode=true 时 data 为空格分隔的 HEX 字符串；否则原样发送。
+func (s *SerialService) Send(data string, hexMode bool) error {
+	var payload []byte
+	if hexMode {
+		clean := strings.Join(strings.Fields(data), "")
+		if clean == "" {
+			return fmt.Errorf("empty hex payload")
+		}
+		b, err := hex.DecodeString(clean)
+		if err != nil {
+			return fmt.Errorf("invalid hex: %w", err)
+		}
+		payload = b
+	} else {
+		payload = []byte(data)
+	}
+	n, err := s.port.Write(payload)
+	if err != nil {
+		return err
+	}
+	s.mu.Lock()
+	s.bytesOut += uint64(n)
+	s.mu.Unlock()
+	s.emitStatus()
+	return nil
+}
+
+// GetStatus 返回连接状态与字节计数。
+func (s *SerialService) GetStatus() map[string]any {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	state := "disconnected"
+	if s.connected {
+		state = "connected"
+	}
+	return map[string]any{
+		"state":     state,
+		"bytes_in":  s.bytesIn,
+		"bytes_out": s.bytesOut,
+	}
+}
+
+func (s *SerialService) emitStatus() {
+	st := s.GetStatus()
+	s.emit(events.EvSerialStatus, map[string]any{
+		"state": st["state"], "bytes_in": st["bytes_in"], "bytes_out": st["bytes_out"],
+	})
+}
+
+// readLoop 读串口 → 33ms 合帧批量推送；读错误即断开（不 panic、不泄漏）。
+func (s *SerialService) readLoop(stop chan struct{}) {
+	buf := make([]byte, 4096)
+	var pending []byte
+	ticker := time.NewTicker(time.Duration(batchIntervalMs) * time.Millisecond)
+	defer ticker.Stop()
+
+	flush := func() {
+		if len(pending) == 0 {
+			return
+		}
+		s.emit(events.EvSerialData, map[string]any{
+			"hex": strings.ToUpper(hex.EncodeToString(pending)),
+			"ts":  time.Now().UnixMilli(),
+		})
+		pending = pending[:0]
+	}
+
+	for {
+		select {
+		case <-stop:
+			flush()
+			return
+		case <-ticker.C:
+			flush()
+		default:
+			n, err := s.port.Read(buf)
+			if err != nil {
+				flush()
+				s.mu.Lock()
+				s.connected = false
+				s.mu.Unlock()
+				_ = s.port.Close()
+				s.emitStatus()
+				return
+			}
+			if n > 0 {
+				pending = append(pending, buf[:n]...)
+				s.mu.Lock()
+				s.bytesIn += uint64(n)
+				s.mu.Unlock()
+			}
+		}
+	}
+}
