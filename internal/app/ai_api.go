@@ -425,6 +425,7 @@ func (a *AIAPI) ensureExternalNotice(st llm.Settings) error {
 }
 
 // ResolveAIConfirm UI 回填确认结果（应用/放弃、写入/不写入）。
+// ResolveAIConfirm 处理确认卡片的用户决定（阻塞中的工具立即恢复）。
 func (a *AIAPI) ResolveAIConfirm(id string, approved bool) error {
 	a.mu.Lock()
 	ch := a.pending[id]
@@ -437,6 +438,19 @@ func (a *AIAPI) ResolveAIConfirm(id string, approved bool) error {
 	default: // 重复点击：忽略
 	}
 	return nil
+}
+
+// RecordUserAction 把用户的持久化动作写进当前会话 JSONL（PRD §4.6 回溯）。
+// 由前端在确认卡片落定后调用：apply_script / apply_context_hints / reject_confirm。
+// 写失败或无会话静默忽略——审计记录不能反过来打断用户操作。
+func (a *AIAPI) RecordUserAction(action, detail string) {
+	a.mu.Lock()
+	sess := a.sess
+	a.mu.Unlock()
+	if sess == nil || action == "" {
+		return
+	}
+	sess.Append(agent.SessionEvent{Type: agent.EvSessionUserAct, Action: action, Content: detail})
 }
 
 // confirmer 把 agent 的确认请求转成 UI 事件并阻塞等待。

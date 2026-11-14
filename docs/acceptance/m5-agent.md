@@ -98,7 +98,7 @@ PRD 门槛：首试 ≥50% ✓，3 轮内 ≥85% ✓。
 
 1. **任务 B（图表）**：白名单与工具已就位，但没有跑真实供应商回归；`charts:updated` 联动已在 M3 验证
 2. **Diff 呈现**：确认卡片是文本 unified diff（红绿行），不是 Monaco DiffEditor（3.3MB chunk 只在脚本页签加载，避免 AI 页签背这个包袱）
-3. **`user_action` 事件**：应用脚本后还没写进 JSONL（阶段三补；不影响回溯 tool 事件）
+3. **`user_action` 事件**：~~应用脚本后还没写进 JSONL~~ 已补（2026-11-14）：确认卡落定后前端经 `AIAPI.RecordUserAction` 写入当前会话 JSONL（`apply_script` / `apply_context_hints` / `reject_confirm`），单测 `TestAIRecordUserAction`；全链路待阶段二真实 AI 运行时回归
 4. **字段含义标注表**（§4.4 侧栏）未实现
 5. **eval 只有 6 条**：需要扩到 20+ 条并接入 CI 门槛（当前手动跑）
 6. 上下文只回放 user/assistant 文本，历史轮次的 tool_call 结果不重放（模型需要时会重新读）

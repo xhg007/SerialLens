@@ -383,6 +383,15 @@ export const useAIStore = create<AIState>((set, get) => {
       set({ confirming: true });
       try {
         await AIAPI.ResolveAIConfirm(c.id, approved);
+        // 用户的持久化决定写进会话 JSONL（PRD §4.6 回溯：审计模型只看得到结果，看不到用户是否点头）
+        void AIAPI.RecordUserAction(
+          !approved
+            ? "reject_confirm"
+            : c.kind === "script_draft"
+              ? "apply_script"
+              : "apply_context_hints",
+          c.kind === "script_draft" ? c.target || "" : c.title,
+        ).catch(() => {});
         if (approved && c.kind === "script_draft" && c.content) {
           // 只有用户确认才写正式脚本目录（PRD §4.1：AI 不越权）
           const active = c.target || (await activeScriptName());

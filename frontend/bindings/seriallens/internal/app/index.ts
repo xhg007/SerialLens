@@ -5,6 +5,7 @@ import * as AIAPI from "./aiapi.js";
 import * as ChartsAPI from "./chartsapi.js";
 import * as Desktop from "./desktop.js";
 import * as EditorAPI from "./editorapi.js";
+import * as ExportAPI from "./exportapi.js";
 import * as ParserAPI from "./parserapi.js";
 import * as ProjectService from "./projectservice.js";
 import * as SerialService from "./serialservice.js";
@@ -13,6 +14,7 @@ export {
     ChartsAPI,
     Desktop,
     EditorAPI,
+    ExportAPI,
     ParserAPI,
     ProjectService,
     SerialService

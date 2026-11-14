@@ -87,7 +87,17 @@ export function LoadAISession(id: string): $CancellablePromise<{ [_ in string]?:
 }
 
 /**
+ * RecordUserAction 把用户的持久化动作写进当前会话 JSONL（PRD §4.6 回溯）。
+ * 由前端在确认卡片落定后调用：apply_script / apply_context_hints / reject_confirm。
+ * 写失败或无会话静默忽略——审计记录不能反过来打断用户操作。
+ */
+export function RecordUserAction(action: string, detail: string): $CancellablePromise<void> {
+    return $Call.ByID(2129183811, action, detail);
+}
+
+/**
  * ResolveAIConfirm UI 回填确认结果（应用/放弃、写入/不写入）。
+ * ResolveAIConfirm 处理确认卡片的用户决定（阻塞中的工具立即恢复）。
  */
 export function ResolveAIConfirm(id: string, approved: boolean): $CancellablePromise<void> {
     return $Call.ByID(1490336093, id, approved);

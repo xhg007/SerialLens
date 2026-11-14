@@ -25,6 +25,14 @@ export function CloseToTray(): $CancellablePromise<void> {
 }
 
 /**
+ * FocusMainWindow 第二实例启动时把主窗口拉到前台：
+ * 从托盘隐藏态或最小化态恢复并聚焦（single-instance 的窗口管理）。
+ */
+export function FocusMainWindow(): $CancellablePromise<void> {
+    return $Call.ByID(3663336690);
+}
+
+/**
  * HideToTray 隐藏窗口，进程与串口会话继续。
  */
 export function HideToTray(): $CancellablePromise<void> {

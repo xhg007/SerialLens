@@ -71,3 +71,11 @@ export function SetEmitter(fn: events$0.Emitter): $CancellablePromise<void> {
 export function SetRawTap(fn: any): $CancellablePromise<void> {
     return $Call.ByID(37462231, fn);
 }
+
+/**
+ * StartHotplugWatch 启动串口插拔监听：列表变化时广播 serial:ports。
+ * ctx 由 Wails 服务生命周期管理（应用退出时 cancel）。
+ */
+export function StartHotplugWatch(): $CancellablePromise<void> {
+    return $Call.ByID(428952150);
+}

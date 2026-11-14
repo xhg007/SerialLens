@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"seriallens/internal/agent"
 	"seriallens/internal/events"
 	"seriallens/internal/llm"
 	"seriallens/internal/project"
@@ -434,5 +435,55 @@ func TestAISystemPromptInjectsCurrentScript(t *testing.T) {
 	}
 	if !strings.Contains(sys.Content, "优先使用小端解析") {
 		t.Fatal("system prompt should include system_extra")
+	}
+}
+
+// user_action 落 JSONL（PRD §4.6 回溯）：确认卡片的用户决定必须留痕。
+func TestAIRecordUserAction(t *testing.T) {
+	ai, _, _ := newAIFixture(t)
+	// 直接挂一个临时目录会话（RecordUserAction 只依赖 a.sess）
+	sess, err := agent.NewSession(t.TempDir(), "test_act")
+	if err != nil {
+		t.Fatalf("new session: %v", err)
+	}
+	ai.mu.Lock()
+	ai.sess = sess
+	ai.mu.Unlock()
+
+	ai.RecordUserAction("apply_script", "main.lua")
+	ai.RecordUserAction("reject_confirm", "应用脚本")
+
+	// 无会话/空 action 不 panic、不写
+	ai2 := &AIAPI{}
+	ai2.RecordUserAction("apply_script", "x") // sess == nil
+	sess2, _ := agent.NewSession(t.TempDir(), "test_act2")
+	ai3 := &AIAPI{sess: sess2}
+	ai3.RecordUserAction("", "") // action == ""
+
+	events, err := agent.LoadEvents(sess.Path())
+	if err != nil {
+		t.Fatalf("load events: %v", err)
+	}
+	var acts []agent.SessionEvent
+	for _, ev := range events {
+		if ev.Type == agent.EvSessionUserAct {
+			acts = append(acts, ev)
+		}
+	}
+	if len(acts) != 2 {
+		t.Fatalf("want 2 user_action events, got %d", len(acts))
+	}
+	if acts[0].Action != "apply_script" || acts[0].Content != "main.lua" {
+		t.Fatalf("first event = %+v", acts[0])
+	}
+	if acts[1].Action != "reject_confirm" || acts[1].Content != "应用脚本" {
+		t.Fatalf("second event = %+v", acts[1])
+	}
+
+	evs2, _ := agent.LoadEvents(sess2.Path())
+	for _, ev := range evs2 {
+		if ev.Type == agent.EvSessionUserAct {
+			t.Fatal("empty action must not be recorded")
+		}
 	}
 }
