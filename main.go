@@ -31,6 +31,7 @@ func main() {
 		Services: []application.Service{
 			application.NewService(services.Project),
 			application.NewService(services.Serial),
+			application.NewService(services.Export),
 			application.NewService(services.Parser),
 			application.NewService(services.Charts),
 			application.NewService(services.Editor),
