@@ -1,6 +1,7 @@
 package app
 
 import (
+	"log"
 	"sync/atomic"
 
 	"github.com/wailsapp/wails/v3/pkg/application"
@@ -111,6 +112,21 @@ func (d *Desktop) HideToTray() {
 
 // ShowFromTray 从托盘恢复并聚焦（托盘菜单、托盘双击、前端都用它）。
 func (d *Desktop) ShowFromTray() { d.ShowWindow() }
+
+// FocusMainWindow 第二实例启动时把主窗口拉到前台：
+// 从托盘隐藏态或最小化态恢复并聚焦（single-instance 的窗口管理）。
+func (d *Desktop) FocusMainWindow() {
+	if d == nil || d.win == nil {
+		return
+	}
+	if d.win.IsMinimised() {
+		d.win.Restore()
+	} else {
+		log.Println("[desktop] second-instance: window not minimised, just show+focus")
+	}
+	d.win.Show()
+	d.win.Focus()
+}
 
 // ShowWindow 显示并前置窗口。
 func (d *Desktop) ShowWindow() {

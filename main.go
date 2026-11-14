@@ -40,6 +40,14 @@ func main() {
 		Assets: application.AssetOptions{
 			Handler: application.AssetFileServerFS(assets),
 		},
+		// 单实例：串口连接是独占资源，双开必然抢端口。
+		// 第二次启动时通知首实例把主窗口拉到前台，自身退出。
+		SingleInstance: &application.SingleInstanceOptions{
+			UniqueID: "com.seriallens.app",
+			OnSecondInstanceLaunch: func(application.SecondInstanceData) {
+				desktop.FocusMainWindow()
+			},
+		},
 		Mac: application.MacOptions{
 			ApplicationShouldTerminateAfterLastWindowClosed: true,
 		},
