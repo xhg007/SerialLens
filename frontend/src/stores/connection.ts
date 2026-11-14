@@ -43,6 +43,10 @@ export const useConnectionStore = create<ConnectionState>((set, get) => {
         bytesOut: Number(ev.data?.bytes_out ?? 0),
       });
     }),
+    // 热插拔：后端轮询检测到端口列表变化时广播（serial_hotplug.go）
+    Events.On("serial:ports", (ev: any) => {
+      set({ ports: ((ev.data?.ports ?? []) as PortInfo[]) ?? [] });
+    }),
   );
 
   return {

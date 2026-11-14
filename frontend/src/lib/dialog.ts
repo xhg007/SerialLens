@@ -32,3 +32,26 @@ export function baseName(path: string): string {
   const parts = path.split(/[\\/]+/).filter(Boolean);
   return parts[parts.length - 1] ?? "";
 }
+
+// 系统原生保存对话框，返回所选路径（取消返回空串）。
+export async function saveFileDialog(opts: {
+  title: string;
+  defaultName: string;
+  filters?: { name: string; pattern: string }[];
+}): Promise<string> {
+  try {
+    const res = await Dialogs.SaveFile({
+      Title: opts.title,
+      Filename: opts.defaultName,
+      CanChooseFiles: true,
+      CanCreateDirectories: true,
+      ButtonText: "保存",
+      ...(opts.filters ? { Filters: opts.filters } : {}),
+    } as any);
+    return (res ?? "").trim();
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e ?? "");
+    if (/cancel|取消/i.test(msg)) return "";
+    throw e;
+  }
+}

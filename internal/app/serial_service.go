@@ -53,6 +53,7 @@ func (s *SerialService) ServiceStartup(ctx context.Context, options application.
 			app.Event.Emit(event, payload)
 		})
 	}
+	s.StartHotplugWatch(ctx)
 	return nil
 }
 

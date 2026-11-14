@@ -835,6 +835,7 @@ end
 | 关闭按钮语义 | 标题栏 × 与 `WindowClosing` hook → **收进托盘**；托盘菜单「退出」才真退出（`quitting` 标志放行 hook） | 串口工具常驻心智：误关 × 不应丢串口现场；`internal/app/desktop.go` 是窗口/托盘行为的唯一出处 |
 | 托盘 | 常驻图标（`build/trayicon.png`，accent 青色自绘，黑 W 默认图在深色任务栏看不见）+ 菜单（显示主窗口/退出）+ 单击切换显隐、双击显示 | Win11 新图标默认进溢出区（^ 内）；tooltip 写明用途 |
 | 防多开 | Wails 内置 `SingleInstance`（命名 mutex，UniqueID=`com.seriallens.app`）；第二实例通知首实例后自动退出，回调只做「拉起主窗口聚焦」 | 串口连接是独占资源，双开必然抢端口；第二实例不解析任何参数，回调数据一律不信任（文档警告）；Restore 仅在最小化时调用，避免把最大化窗口还原 |
+| P0 小缺口补齐（2026-11-14） | 终端过滤同时匹配 HEX 串与解码后 ASCII（新增 RX 文本显示模式）；发送面板 CR/LF 追加（提取 `applyCrLf` 纯函数，HEX 模式追加 0D/0A 字节）+ 发送历史（20 条，↑ 回填）；图表导出 PNG（widget canvas 合成底色）/CSV（全通道时间序列），走系统保存对话框 + `ExportAPI.SaveFile`（base64 统一读写）；串口热插拔：2s 轮询 diff 广播 `serial:ports` | RegisterDeviceNotification 要挂窗口消息且不跨平台，枚举只是注册表查询——轮询+变化才广播更简单且服务端受益；导出统一 base64 避免 PNG/CSV 两条编码路径；com0com 无对端时串口 Write 会阻塞（缓冲满），验收时必须有对端读 |
 ---
 ## 落地要点总结
 1. **先建 eval，再写 Agent**：`internal/agent/eval/` 样本集在 M5 开始前就要有骨架，prompt 调优不能盲改；

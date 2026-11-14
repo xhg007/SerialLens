@@ -5,7 +5,9 @@ import * as echarts from "echarts/core";
 import { GaugeChart } from "echarts/charts";
 import { CanvasRenderer } from "echarts/renderers";
 import * as ChartsAPI from "../../bindings/seriallens/internal/app/chartsapi";
+import * as ExportAPI from "../../bindings/seriallens/internal/app/exportapi";
 import { seriesBuffer } from "../lib/series";
+import { saveFileDialog } from "../lib/dialog";
 import { boundChannels, channelColor, useChartsStore, type ChannelCfg, type WidgetCfg } from "../stores/charts";
 import { useParserStore } from "../stores/parser";
 
@@ -20,6 +22,7 @@ export function ChartPanel() {
   const config = useChartsStore((s) => s.config);
   const error = useChartsStore((s) => s.error);
   const [fullscreenId, setFullscreenId] = useState<string | null>(null);
+  const [exportError, setExportError] = useState("");
 
   const grid = config?.layout.grid ?? { cols: 12, row_height: 80 };
 
@@ -42,6 +45,18 @@ export function ChartPanel() {
       >
         重置布局
       </button>
+      <button
+        className={TOOLBTN}
+        onClick={() => void exportAllCsv(setExportError)}
+        title="导出全部通道时间序列（缓冲区内，约 200s 历史）"
+      >
+        导出 CSV
+      </button>
+      {exportError && (
+        <span className="truncate text-[11px] text-danger" title={exportError}>
+          {exportError}
+        </span>
+      )}
       {error && (
         <span className="truncate text-[11px] text-danger" title={error}>
           {error}
@@ -75,6 +90,7 @@ export function ChartPanel() {
           {widgets.map((w) => (
             <div
               key={w.id}
+              id={`widget-${w.id}`}
               className="flex min-h-0 flex-col overflow-hidden rounded-panel border border-border bg-bg-1"
               style={{
                 gridColumn: `${w.position.x + 1} / span ${w.position.w}`,
@@ -85,6 +101,13 @@ export function ChartPanel() {
                 <span className="truncate font-semibold">{w.title}</span>
                 <button
                   className="ml-auto text-text-2 hover:text-accent"
+                  title="导出 PNG"
+                  onClick={() => void exportWidgetPng(w, setExportError)}
+                >
+                  ⇩
+                </button>
+                <button
+                  className="text-text-2 hover:text-accent"
                   title="全屏"
                   onClick={() => setFullscreenId(w.id)}
                 >
@@ -354,4 +377,78 @@ function FieldTableWidget() {
       </table>
     </div>
   );
+}
+
+// ---------- 导出（PNG / CSV，系统保存对话框 → ExportAPI.SaveFile 落盘） ----------
+
+const BG = "#0F131A";
+
+// widget 容器内第一个 canvas 合成到工程底色上再导出（uPlot/ECharts 均为 canvas）。
+async function exportWidgetPng(w: WidgetCfg, onError: (msg: string) => void) {
+  try {
+    onError("");
+    const canvas = document.getElementById(`widget-${w.id}`)?.querySelector("canvas");
+    if (!canvas) {
+      onError("该面板没有可导出的画面");
+      return;
+    }
+    const out = document.createElement("canvas");
+    out.width = canvas.width;
+    out.height = canvas.height;
+    const ctx = out.getContext("2d");
+    if (!ctx) {
+      onError("无法创建导出画布");
+      return;
+    }
+    ctx.fillStyle = BG;
+    ctx.fillRect(0, 0, out.width, out.height);
+    ctx.drawImage(canvas, 0, 0);
+    const b64 = out.toDataURL("image/png").split(",")[1] ?? "";
+    const picked = await saveFileDialog({
+      title: "导出 PNG",
+      defaultName: `${w.title}.png`,
+      filters: [{ name: "PNG 图片", pattern: "*.png" }],
+    });
+    if (!picked) return;
+    const path = picked.toLowerCase().endsWith(".png") ? picked : `${picked}.png`;
+    await ExportAPI.SaveFile(path, b64);
+  } catch (e: any) {
+    onError(String(e?.message ?? e));
+  }
+}
+
+// 全通道时间序列 CSV：第一列 timestamp（ISO8601），随后每通道一列，缺测留空。
+async function exportAllCsv(onError: (msg: string) => void) {
+  try {
+    onError("");
+    const names = seriesBuffer.knownChannels();
+    if (names.length === 0) {
+      onError("暂无通道数据可导出");
+      return;
+    }
+    // windowSec 取超大值 = 导出缓冲区全部历史（约 200s）
+    const { xs, ys } = seriesBuffer.build(names, 1e9);
+    const rows: string[] = [`timestamp,${names.join(",")}`];
+    for (let i = 0; i < xs.length; i++) {
+      const cells = ys.map((col) => {
+        const v = col[i];
+        return Number.isNaN(v) ? "" : String(v);
+      });
+      rows.push(`${new Date(xs[i] * 1000).toISOString()},${cells.join(",")}`);
+    }
+    const content = rows.join("\n") + "\n";
+    const picked = await saveFileDialog({
+      title: "导出 CSV",
+      defaultName: "channels.csv",
+      filters: [{ name: "CSV 文件", pattern: "*.csv" }],
+    });
+    if (!picked) return;
+    const path = picked.toLowerCase().endsWith(".csv") ? picked : `${picked}.csv`;
+    const bytes = new TextEncoder().encode(content);
+    let binary = "";
+    for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
+    await ExportAPI.SaveFile(path, btoa(binary));
+  } catch (e: any) {
+    onError(String(e?.message ?? e));
+  }
 }
