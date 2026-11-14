@@ -52,7 +52,9 @@ func TestValidateStrictBounds(t *testing.T) {
 		{"bad stop_bits", func(m *ProjectMeta) { m.SerialConfig.StopBits = 3 }},
 		{"bad flow_control", func(m *ProjectMeta) { m.SerialConfig.FlowControl = "bogus" }},
 		{"path escape script", func(m *ProjectMeta) { m.ActiveScript = "../evil.lua" }},
-		{"abs script", func(m *ProjectMeta) { m.ActiveScript = "C:\\evil.lua" }},
+		// project.json 跨机迁移：两种平台的绝对路径/分隔符都必须在所有平台上拒绝
+		{"abs win script", func(m *ProjectMeta) { m.ActiveScript = "C:\\evil.lua" }},
+		{"abs posix script", func(m *ProjectMeta) { m.ActiveScript = "/etc/evil.lua" }},
 		{"non lua", func(m *ProjectMeta) { m.ActiveScript = "main.txt" }},
 	}
 	for _, c := range cases {

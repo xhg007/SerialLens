@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -96,9 +97,11 @@ func Validate(m *ProjectMeta) error {
 		return fmt.Errorf("invalid flow_control %q", m.SerialConfig.FlowControl)
 	}
 	if m.ActiveScript != "" {
-		// 工程可跨机迁移（PRD §3.2），脚本名必须为 scripts/ 下的纯文件名，
-		// 拒绝路径分隔符与 .. 逃逸（I7 安全面）。
-		if filepath.Base(m.ActiveScript) != m.ActiveScript || m.ActiveScript == "." || m.ActiveScript == ".." {
+		// 工程可跨机迁移（PRD §3.2），脚本名必须为 scripts/ 下的纯文件名。
+		// project.json 是跨平台数据：Windows 的 \ 在 Linux 上不是分隔符（反之
+		// 亦然），filepath.Base 只挡本平台的分隔符——显式拒绝两种，保证三平台
+		// 行为一致，堵住 I7 路径逃逸面。
+		if strings.ContainsAny(m.ActiveScript, `/\`) || m.ActiveScript == "." || m.ActiveScript == ".." {
 			return fmt.Errorf("active_script %q must be a plain file name", m.ActiveScript)
 		}
 		if filepath.Ext(m.ActiveScript) != ".lua" {
