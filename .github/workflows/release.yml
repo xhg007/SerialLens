@@ -43,10 +43,17 @@ jobs:
           npm ci
           npx tsc --noEmit
 
-      # 项目未依赖 CGO（纯 Go 串口/Lua 栈），测试关闭 CGO 免装 gcc
+      # Linux 下 wails v3 的 pointer 类型定义在 cgo 文件里：CGO_ENABLED=0 会报
+      # "undefined: pointer"（menu_linux.go 等）。测试必须保持 CGO 开启并装 GTK
+      # 头文件，与 build job 的 linux 环境一致。noble 上 libasound2 是虚拟包，
+      # 须显式 libasound2t64。
+      - name: Install Linux deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgtk-3-dev libwebkit2gtk-4.1-dev libasound2t64
+
       - name: Go vet + test
-        env:
-          CGO_ENABLED: "0"
         run: |
           go vet ./internal/...
           go test ./internal/... ./cmd/...
@@ -81,13 +88,14 @@ jobs:
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
-      # Linux 需要 WebKitGTK 开发头文件（Wails v3 运行时依赖）
+      # Linux 需要 WebKitGTK 开发头文件（Wails v3 运行时依赖）；
+      # noble 上 libasound2 是虚拟包，须显式 libasound2t64
       - name: Install Linux deps
         if: matrix.os == 'ubuntu-latest'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
-            libgtk-3-dev libwebkit2gtk-4.1-dev libasound2
+            libgtk-3-dev libwebkit2gtk-4.1-dev libasound2t64
 
       # 固定到项目使用的 wails v3.0.0，避免 CLI 漂移破坏构建
       - name: Install wails3 CLI
