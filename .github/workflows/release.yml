@@ -1,0 +1,154 @@
+# SerialLens 编译发布流水线
+#
+# 触发方式：
+#   1. 推 tag：  git tag v0.1.0 && git push origin v0.1.0
+#      → 测试通过后三平台编译，产物上传到 GitHub Release（自动生成说明）
+#   2. 手动：    Actions 页面 Run workflow（仅编译，不上传 Release，产物在 Artifacts 里）
+#
+# 产物命名：seriallens-<版本>-<系统>-<架构>.zip
+#
+# 签名/公证（可选，默认关闭）：Windows codesign 与 macOS notarization 需要先配好
+# 证书与 secrets，见文末注释。
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write # gh release create 需要
+
+jobs:
+  # ---------- 1. 测试门禁 ----------
+  test:
+    name: Test (Go + TypeScript)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Frontend typecheck
+        working-directory: frontend
+        run: |
+          npm ci
+          npx tsc --noEmit
+
+      # 项目未依赖 CGO（纯 Go 串口/Lua 栈），测试关闭 CGO 免装 gcc
+      - name: Go vet + test
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          go vet ./internal/...
+          go test ./internal/... ./cmd/...
+
+  # ---------- 2. 三平台编译 ----------
+  build:
+    name: Build (${{ matrix.name }})
+    needs: test
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: windows-amd64
+            os: windows-latest
+            # wails3 build 在 Windows 上默认 CGO_ENABLED=0，纯 Go 交叉编译
+          - name: linux-amd64
+            os: ubuntu-latest
+          - name: darwin-arm64
+            os: macos-latest # Apple Silicon（如需 Intel 产物再加 macos-13 一行）
+
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      # Linux 需要 WebKitGTK 开发头文件（Wails v3 运行时依赖）
+      - name: Install Linux deps
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgtk-3-dev libwebkit2gtk-4.1-dev libasound2
+
+      # 固定到项目使用的 wails v3.0.0，避免 CLI 漂移破坏构建
+      - name: Install wails3 CLI
+        run: go install github.com/wailsapp/wails/v3/cmd/wails3@v3.0.0
+
+      - name: Build (production)
+        run: wails3 build
+
+      # ---- 打包 ----
+      - name: Package (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          $v = "${{ github.ref_name }}"
+          if (-not $v.StartsWith("v")) { $v = "v0.0.0-dev" }
+          Compress-Archive -Path build/bin/seriallens.exe `
+            -DestinationPath "seriallens-$v-windows-amd64.zip"
+
+      - name: Package (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          VERSION="${{ github.ref_name }}"
+          [[ "$VERSION" == v* ]] || VERSION="v0.0.0-dev"
+          tar -czf "seriallens-$VERSION-linux-amd64.tar.gz" -C build/bin seriallens
+
+      - name: Package (macOS)
+        if: matrix.os == 'macos-latest'
+        run: |
+          VERSION="${{ github.ref_name }}"
+          [[ "$VERSION" == v* ]] || VERSION="v0.0.0-dev"
+          # wails3 build 在 darwin 上产出裸二进制 build/bin/seriallens；
+          # .app bundle 需要先在 build/config.yml 配置 productName/identifier 后
+          # 跑 wails3 package（见 backlog）——目前先分发二进制
+          gzip -c build/bin/seriallens > "seriallens-$VERSION-darwin-arm64.tar.gz"
+          ls seriallens-*
+
+      - name: Upload artifact (always)
+        uses: actions/upload-artifact@v4
+        with:
+          name: seriallens-${{ matrix.name }}
+          path: seriallens-*
+
+      # ---- 发布（仅 tag 触发） ----
+      - name: Upload to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # 同一 Release 可能被多平台并发创建，已存在则追加上传
+          gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+            || gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
+                 --title "SerialLens $GITHUB_REF_NAME" --generate-notes
+          gh release upload "$GITHUB_REF_NAME" seriallens-* --repo "$GITHUB_REPOSITORY" --clobber
+
+# ==================== 签名/公证备忘（暂未启用） ====================
+#
+# Windows 代码签名：build/windows/Taskfile.yml 预留了 SIGN_CERTIFICATE/
+# SIGN_THUMBPRINT 变量，`wails3 setup signing` 配好本地密钥后，在 build 步骤
+# 传入 env 即可；CI 里通常转用 EV 证书 + 远程签名服务（如 Azure Trusted Signing）。
+#
+# macOS 公证：需要 APPLE_ID / APPLE_PASSWORD / APPLE_TEAM_ID 三个 secrets，
+# 在 Package (macOS) 之前插入：
+#   xcrun notarytool store-creds ... && xcrun notarytool submit ... && xcrun stapler staple ...

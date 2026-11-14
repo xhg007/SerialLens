@@ -10,6 +10,7 @@
 - [ ] **脚本模板落盘**：Modbus 示例只存在于测试里，M6「工程模板」要把它落成模板的 `scripts/main.lua` 预置内容（m2 遗留 ④）。
 - [ ] **com0com Win11 实机验证**：官方 Win7 签名包在 Win11 高版本可能装不上；打包验收前补真实环境验证（m0-m1 遗留 ④）。
 - [ ] **突发缓冲真实硬件复测**：M2 用 com0com 回环压测过，USB-Serial 实机未测（m0-m1 遗留 ②）。
+- [ ] **打包元数据**：`build/config.yml` 仍是 wails 模板默认值（`My Product` / `com.mycompany.myproduct` / `0.0.1`），Windows 资源信息与将来 macOS .app bundle 都取自这里；打包正式版前必须改为真实产品名/标识/版本（CI workflow 里 macOS 目前只能分发裸二进制）。
 
 ## 阶段二（AI / 布局联动）
 
