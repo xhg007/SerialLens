@@ -8,9 +8,11 @@
 
 ## 演示视频
 
-<!-- GitHub 会内联播放仓库内 mp4；若网页端不显示，点开 assets 里的 exp.mp4 即可 -->
+[![演示视频](docs/screenshots/overview.png)](docs/screenshots/exp.mp4)
 
-<video src="docs/screenshots/exp.mp4" controls muted width="100%"></video>
+<!-- 若上面的链接在网页端打不开，直接看 docs/screenshots/exp.mp4；
+     或将 exp.mp4 拖入 GitHub README 编辑器生成 user-attachments 链接后替换为：
+     https://github.com/user-attachments/assets/<id> 的 <video> 标签 -->
 
 ## 特性一览
 
