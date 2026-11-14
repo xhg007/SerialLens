@@ -112,7 +112,8 @@ jobs:
         run: |
           $v = "${{ github.ref_name }}"
           if (-not $v.StartsWith("v")) { $v = "v0.0.0-dev" }
-          Compress-Archive -Path build/bin/seriallens.exe `
+          # wails3 build 输出到仓库根 bin/（Taskfile BIN_DIR=bin），不是 build/bin/
+          Compress-Archive -Path bin/seriallens.exe `
             -DestinationPath "seriallens-$v-windows-amd64.zip"
 
       - name: Package (Linux)
@@ -120,17 +121,17 @@ jobs:
         run: |
           VERSION="${{ github.ref_name }}"
           [[ "$VERSION" == v* ]] || VERSION="v0.0.0-dev"
-          tar -czf "seriallens-$VERSION-linux-amd64.tar.gz" -C build/bin seriallens
+          tar -czf "seriallens-$VERSION-linux-amd64.tar.gz" -C bin seriallens
 
       - name: Package (macOS)
         if: matrix.os == 'macos-latest'
         run: |
           VERSION="${{ github.ref_name }}"
           [[ "$VERSION" == v* ]] || VERSION="v0.0.0-dev"
-          # wails3 build 在 darwin 上产出裸二进制 build/bin/seriallens；
+          # wails3 build 在 darwin 上产出裸二进制 bin/seriallens；
           # .app bundle 需要先在 build/config.yml 配置 productName/identifier 后
           # 跑 wails3 package（见 backlog）——目前先分发二进制
-          gzip -c build/bin/seriallens > "seriallens-$VERSION-darwin-arm64.tar.gz"
+          gzip -c bin/seriallens > "seriallens-$VERSION-darwin-arm64.tar.gz"
           ls seriallens-*
 
       - name: Upload artifact (always)
