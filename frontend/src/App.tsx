@@ -1,5 +1,6 @@
 import { Suspense, lazy, useCallback, useEffect, useRef, useState } from "react";
 import { TitleBar } from "./components/TitleBar";
+import { ContextMenu } from "./components/ContextMenu";
 import { ChartPanel } from "./panels/ChartPanel";
 import { ProjectSwitcher } from "./panels/ProjectSwitcher";
 import { ConnectionPanel } from "./panels/ConnectionPanel";
@@ -75,6 +76,8 @@ export default function App() {
       <footer className="flex h-6 shrink-0 items-center gap-4 border-t border-border bg-bg-1 px-3 text-xs text-text-2">
         <StatusLine />
       </footer>
+
+      <ContextMenu />
     </div>
   );
 }

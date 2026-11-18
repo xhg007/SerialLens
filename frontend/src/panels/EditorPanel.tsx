@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import * as EditorAPI from "../../bindings/seriallens/internal/app/editorapi";
 import { editorOptions, initMonaco, monaco, registerApiDocs } from "../lib/monaco";
+import { setContextEditor } from "../lib/activeEditor";
 import { useEditorStore, type Diagnostic, type TestRunResult } from "../stores/editor";
 
 const TOOLBTN =
@@ -54,6 +55,28 @@ export function EditorPanel() {
     const ed = monaco.editor.create(host, { ...editorOptions(), value: "" });
     editorRef.current = ed;
 
+    // 右键菜单只暴露复制/粘贴/全选；Monaco 的选区在 model 里，不能靠 DOM Selection。
+    setContextEditor({
+      getSelectedText: () => {
+        const model = ed.getModel();
+        const sel = ed.getSelection();
+        return model && sel ? model.getValueInRange(sel) : "";
+      },
+      paste: (text) => {
+        const model = ed.getModel();
+        const sel = ed.getSelection();
+        if (!model || !sel) return;
+        ed.executeEdits("context-menu", [{ range: sel, text, forceMoveMarkers: true }]);
+        ed.focus();
+      },
+      selectAll: () => {
+        const model = ed.getModel();
+        if (!model) return;
+        ed.setSelection(model.getFullModelRange());
+        ed.focus();
+      },
+    });
+
     ed.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
       void useEditorStore.getState().save();
     });
@@ -65,6 +88,7 @@ export function EditorPanel() {
 
     return () => {
       sub.dispose();
+      setContextEditor(null);
       ed.dispose();
       for (const m of modelsRef.current.values()) m.dispose();
       modelsRef.current.clear();

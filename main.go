@@ -68,7 +68,11 @@ func main() {
 		Windows: application.WindowsWindow{
 			Theme: application.Dark,
 		},
-		URL: "/",
+		// 右键菜单由前端 ContextMenu.tsx 统一接管（只有复制/粘贴/全选）。
+		// 开发模式 Wails 仍会强制打开原生菜单，前端在 contextmenu 里 preventDefault 压掉；
+		// 生产构建靠这里关掉原生菜单，保证任何情况下都不会出现 Inspect。
+		DefaultContextMenuDisabled: true,
+		URL:                        "/",
 	})
 
 	desktop.Init(trayIcon)
