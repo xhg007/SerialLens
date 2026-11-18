@@ -7,6 +7,7 @@ import {
   type AIToolCall,
 } from "../stores/ai";
 import { useParserStore } from "../stores/parser";
+import { Markdown } from "../components/Markdown";
 
 const BTN =
   "rounded-panel border border-border px-2 py-0.5 text-xs text-text-2 hover:border-accent hover:text-accent disabled:opacity-40 disabled:hover:border-border disabled:hover:text-text-2";
@@ -500,10 +501,10 @@ function MessageRow({ m }: { m: AIMessage }) {
         </details>
       )}
       {m.tools && m.tools.length > 0 && <ToolTimeline tools={m.tools} />}
-      <div className="text-xs text-text-1">
-        {m.content ? <RichText text={m.content} /> : m.streaming ? <span className="text-text-2">…</span> : null}
+      <div className={m.streaming ? "text-xs text-text-1 md-streaming" : "text-xs text-text-1"}>
+        {m.content ? <Markdown text={m.content} /> : m.streaming ? <span className="text-text-2">…</span> : null}
       </div>
-      {m.streaming && <span className="text-accent">▍</span>}
+      {m.streaming && !m.content && <span className="text-accent">▍</span>}
       <div className="mt-0.5 flex items-center gap-2 text-[10px] text-text-2">
         {m.canceled && <span className="text-warn">已停止</span>}
         {m.error && <span className="text-danger">{m.error}</span>}
@@ -516,48 +517,4 @@ function MessageRow({ m }: { m: AIMessage }) {
   );
 }
 
-// RichText 极简渲染：只识别 ``` 代码块（Lua 输出必须能原样复制），
-// 其余按纯文本 / 换行显示。不引 markdown 库——AI 面板不需要表格与嵌套列表。
-function RichText({ text }: { text: string }) {
-  const parts = text.split("```");
-  return (
-    <>
-      {parts.map((part, i) => {
-        if (i % 2 === 1) {
-          const nl = part.indexOf("\n");
-          const lang = nl >= 0 ? part.slice(0, nl).trim() : "";
-          const code = nl >= 0 ? part.slice(nl + 1) : part;
-          return <CodeBlock key={i} lang={lang} code={code} />;
-        }
-        return (
-          <span key={i} className="whitespace-pre-wrap break-words">
-            {part}
-          </span>
-        );
-      })}
-    </>
-  );
-}
 
-function CodeBlock({ lang, code }: { lang: string; code: string }) {
-  const [copied, setCopied] = useState(false);
-  return (
-    <div className="my-1 overflow-hidden rounded-panel border border-border">
-      <div className="flex items-center gap-2 bg-bg-2 px-2 py-0.5 text-[10px] text-text-2">
-        <span>{lang || "代码"}</span>
-        <button
-          className="ml-auto hover:text-accent"
-          onClick={() => {
-            void navigator.clipboard?.writeText(code).then(() => {
-              setCopied(true);
-              setTimeout(() => setCopied(false), 1200);
-            });
-          }}
-        >
-          {copied ? "已复制" : "复制"}
-        </button>
-      </div>
-      <pre className="max-h-80 overflow-auto bg-bg-0 p-2 text-[11px] leading-4 text-text-1">{code}</pre>
-    </div>
-  );
-}
