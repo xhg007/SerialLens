@@ -79,6 +79,15 @@ export default function App() {
   );
 }
 
+// 右侧面板宽度：最小 320；至少给左侧（240px 侧栏 + 图表终端）留 320px。
+// 窗口最小宽度 960 时上限约 396px，默认 36% 会被夹紧，避免终端发送栏被挤出可视区。
+const DOCK_MIN = 320;
+
+function clampDockWidth(width: number): number {
+  const max = Math.max(DOCK_MIN, window.innerWidth - 240 - 4 - 320);
+  return Math.min(Math.max(Math.round(width), DOCK_MIN), max);
+}
+
 // MainSplit 左右分屏：左侧图表/终端，右侧「脚本 / AI」页签（宽度可拖拽，Ctrl+E 收起）。
 function MainSplit({
   open,
@@ -89,14 +98,21 @@ function MainSplit({
   dock: Dock;
   onSelectDock: (d: Dock) => void;
 }) {
-  const [editorWidth, setEditorWidth] = useState(() => Math.round(window.innerWidth * 0.36));
+  const [editorWidth, setEditorWidth] = useState(() => clampDockWidth(window.innerWidth * 0.36));
   const dragging = useRef(false);
+
+  // 窗口缩小后重新夹紧：固定 px 宽度会把主区压到低于可用宽度。
+  useEffect(() => {
+    const onResize = () => setEditorWidth((w) => clampDockWidth(w));
+    window.addEventListener("resize", onResize);
+    return () => window.removeEventListener("resize", onResize);
+  }, []);
 
   useEffect(() => {
     const onMove = (e: MouseEvent) => {
       if (!dragging.current) return;
       const next = window.innerWidth - e.clientX;
-      setEditorWidth(Math.min(Math.max(next, 320), window.innerWidth - 480));
+      setEditorWidth(clampDockWidth(next));
     };
     const onUp = () => {
       dragging.current = false;

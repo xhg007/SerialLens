@@ -63,16 +63,31 @@ export function AIPanel() {
   return (
     <div className="flex h-full min-h-0 flex-col bg-bg-1">
       {/* 头部 */}
-      <div className="flex shrink-0 items-center gap-2 border-b border-border px-2 py-1">
-        <span className="text-xs font-semibold text-text-2">AI 脚本助手</span>
-        <StatusDot ready={Boolean(settings?.ready)} running={busy} />
-        <span className="truncate text-[11px] text-text-2" title={settings?.base_url}>
-          {settings?.model || "未选择模型"}
-        </span>
-        <div className="ml-auto flex items-center gap-1">
+      <div className="shrink-0 border-b border-border px-2 py-1">
+        <div className="flex items-center gap-2">
+          <span className="shrink-0 whitespace-nowrap text-xs font-semibold text-text-2">AI 脚本助手</span>
+          <StatusDot ready={Boolean(settings?.ready)} running={busy} />
+          <span className="min-w-0 flex-1 truncate text-[11px] text-text-2" title={settings?.base_url}>
+            {settings?.model || "未选择模型"}
+          </span>
+          <button
+            className={`${BTN} shrink-0 whitespace-nowrap`}
+            onClick={() => setShowSettings((v) => !v)}
+          >
+            {showSettings ? "收起设置" : "设置"}
+          </button>
+          <button
+            className={`${BTN} shrink-0 whitespace-nowrap`}
+            disabled={messages.length === 0}
+            onClick={() => void useAIStore.getState().clear()}
+          >
+            清空
+          </button>
+        </div>
+        <div className="mt-1 flex items-center gap-2">
           <TaskToggle task={task} busy={busy} />
           <select
-            className="max-w-32 rounded-panel border border-border bg-bg-2 px-1 py-0.5 text-[11px] text-text-2 outline-none"
+            className="min-w-0 flex-1 rounded-panel border border-border bg-bg-2 px-1 py-0.5 text-[11px] text-text-2 outline-none"
             value={sessionId}
             title="历史会话"
             onChange={(e) => void useAIStore.getState().loadSession(e.target.value)}
@@ -86,12 +101,6 @@ export function AIPanel() {
                 </option>
               ))}
           </select>
-          <button className={BTN} onClick={() => setShowSettings((v) => !v)}>
-            {showSettings ? "收起设置" : "设置"}
-          </button>
-          <button className={BTN} disabled={messages.length === 0} onClick={() => void useAIStore.getState().clear()}>
-            清空
-          </button>
         </div>
       </div>
 

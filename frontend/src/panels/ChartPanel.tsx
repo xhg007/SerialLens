@@ -216,12 +216,19 @@ function LineWidget({ w, bound }: { w: WidgetCfg; bound: ChannelCfg[] }) {
 
     const plot = new uPlot(opts, [[], ...names.map(() => [])], host);
     plotRef.current = plot;
+
+    // uPlot 的图例在 root 内、绘图区下方：height 只约束绘图区，root 会比宿主高出
+    // 一个图例；widget 是 overflow-hidden，不扣掉图例高度就会把图例整条裁掉。
+    const fit = () => {
+      const rect = host.getBoundingClientRect();
+      if (rect.width <= 0 || rect.height <= 0) return;
+      const legendH = plot.root.querySelector<HTMLElement>(".u-legend")?.offsetHeight ?? 0;
+      plot.setSize({ width: rect.width, height: Math.max(60, rect.height - legendH) });
+    };
+    fit();
     draw();
 
-    const ro = new ResizeObserver(() => {
-      const rect = host.getBoundingClientRect();
-      if (rect.width > 0 && rect.height > 0) plot.setSize({ width: rect.width, height: rect.height });
-    });
+    const ro = new ResizeObserver(fit);
     ro.observe(host);
     return () => {
       ro.disconnect();
@@ -341,14 +348,18 @@ function IndicatorWidget({ w, bound }: { w: WidgetCfg; bound: ChannelCfg[] }) {
   const onValue = ch.on_value ?? 1;
   const on = value != null && value === onValue;
   const unknown = value == null;
+  const digits = ch.display_digits ?? (value != null && Number.isInteger(value) ? 0 : 1);
+  const shown = value == null ? "—" : `${value.toFixed(digits)}${ch.unit ?? ""}`;
   return (
     <div className="flex h-full items-center gap-2 px-3">
       <span
-        className={`inline-block h-3 w-3 rounded-full ${unknown ? "bg-text-2/40" : on ? "bg-rx" : "bg-danger"}`}
+        className={`inline-block h-3 w-3 shrink-0 rounded-full ${unknown ? "bg-text-2/40" : on ? "bg-rx" : "bg-danger"}`}
         style={on && !unknown ? { boxShadow: "0 0 8px #34D399" } : undefined}
       />
       <span className="truncate text-xs text-text-1">{ch.name}</span>
-      <span className="ml-auto font-mono text-xs text-text-2">{unknown ? "—" : String(value)}</span>
+      <span className="ml-auto max-w-[45%] truncate font-mono text-xs text-text-2" title={shown}>
+        {shown}
+      </span>
     </div>
   );
 }

@@ -250,8 +250,8 @@ function SendBar(props: {
   }, [props.showHistory]);
 
   return (
-    <div className="flex shrink-0 items-center gap-2 border-t border-border bg-bg-1 px-2 py-1">
-      <label className="flex items-center gap-1 text-xs text-text-2">
+    <div className="flex shrink-0 flex-wrap items-center gap-2 border-t border-border bg-bg-1 px-2 py-1">
+      <label className="flex shrink-0 items-center gap-1 text-xs text-text-2">
         <input
           type="checkbox"
           checked={props.hexMode}
@@ -261,7 +261,7 @@ function SendBar(props: {
         HEX
       </label>
       <select
-        className="rounded-panel border border-border bg-bg-2 px-1 py-0.5 text-xs outline-none focus:border-accent"
+        className="shrink-0 rounded-panel border border-border bg-bg-2 px-1 py-0.5 text-xs outline-none focus:border-accent"
         value={props.crlf}
         onChange={(e) => props.setCrlf(e.target.value as CRLF)}
         title="发送时追加回车/换行"
@@ -272,7 +272,7 @@ function SendBar(props: {
         <option value="lf">+LF (\n)</option>
         <option value="crlf">+CRLF (\r\n)</option>
       </select>
-      <div ref={histRef} className="relative">
+      <div ref={histRef} className="relative shrink-0">
         <button
           className={TOOLBTN}
           onClick={() => props.setShowHistory(!props.showHistory)}
@@ -297,27 +297,29 @@ function SendBar(props: {
           </div>
         )}
       </div>
-      <input
-        className="min-w-0 flex-1 rounded-panel border border-border bg-bg-2 px-2 py-1 text-xs outline-none focus:border-accent"
-        placeholder={props.hexMode ? "AA 06 01 02" : "文本内容"}
-        disabled={props.disabled}
-        value={props.input}
-        onChange={(e) => props.setInput(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") props.doSend();
-          if (e.key === "ArrowUp" && props.history.length > 0) {
-            e.preventDefault();
-            props.onHistoryPick(props.history[0]);
-          }
-        }}
-      />
-      <button
-        className="rounded-panel bg-accent px-3 py-1 text-xs font-semibold text-bg-0 hover:opacity-90 disabled:opacity-40"
-        disabled={props.disabled}
-        onClick={props.doSend}
-      >
-        发送
-      </button>
+      <div className="flex min-w-48 flex-1 items-center gap-2">
+        <input
+          className="min-w-0 flex-1 rounded-panel border border-border bg-bg-2 px-2 py-1 text-xs outline-none focus:border-accent"
+          placeholder={props.hexMode ? "AA 06 01 02" : "文本内容"}
+          disabled={props.disabled}
+          value={props.input}
+          onChange={(e) => props.setInput(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") props.doSend();
+            if (e.key === "ArrowUp" && props.history.length > 0) {
+              e.preventDefault();
+              props.onHistoryPick(props.history[0]);
+            }
+          }}
+        />
+        <button
+          className="shrink-0 rounded-panel bg-accent px-3 py-1 text-xs font-semibold text-bg-0 hover:opacity-90 disabled:opacity-40"
+          disabled={props.disabled}
+          onClick={props.doSend}
+        >
+          发送
+        </button>
+      </div>
       {props.error && <span className="text-xs text-danger">{props.error}</span>}
     </div>
   );
